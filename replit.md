@@ -2,7 +2,7 @@
 
 ## Overview
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+pnpm workspace monorepo using TypeScript. Contains a WhatsApp CDK Activation Bot that lets customers activate ChatGPT subscriptions by sending their CDK key and session token via WhatsApp DM.
 
 ## Stack
 
@@ -14,7 +14,28 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - **Database**: PostgreSQL + Drizzle ORM
 - **Validation**: Zod (`zod/v4`), `drizzle-zod`
 - **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
+- **Build**: esbuild (ESM bundle)
+- **WhatsApp**: `@whiskeysockets/baileys` (WhatsApp Web protocol, no monthly fees)
+- **CDK API**: keys.ovh REST API (`https://keys.ovh/api/v1`)
+
+## WhatsApp Bot
+
+### Source files (`artifacts/api-server/src/`)
+- `cdk.ts` — CDK API client: `checkKey()` (GET /key/{code}/status) and `activateKey()` (POST /activate with async polling)
+- `handler.ts` — Conversation state machine: idle → awaiting_session, rate limiting, deduplication
+- `whatsapp.ts` — Baileys connection, QR generation, auto-reconnect, message routing
+- `admin.ts` — Express routes: GET /api/admin (QR page, token-protected) and GET /api/health
+
+### Environment Variables (Replit Secrets)
+- `CDK_API_KEY` — API key for keys.ovh
+- `CDK_API_BASE` — Base URL (https://keys.ovh/api/v1)
+- `ADMIN_TOKEN` — Secret to protect the /api/admin page
+
+### Admin Page
+Visit `/api/admin?token=<ADMIN_TOKEN>` to see the QR code and connection status.
+
+### Auth state
+Stored in `artifacts/api-server/wa-auth/` (gitignored). Scan QR once — persists across restarts.
 
 ## Key Commands
 

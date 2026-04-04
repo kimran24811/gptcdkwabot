@@ -47,3 +47,7 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# WhatsApp bot auth state (contains session tokens — never commit)
+wa-auth/
+artifacts/api-server/wa-auth/
