@@ -10,13 +10,14 @@ export interface VerifyResult {
 
 export async function verifyPaymentByEmail(
   acctTitle: string,
-  amount: string
+  amount: string,
+  credentials?: { user: string; pass: string }
 ): Promise<VerifyResult> {
-  const user = process.env["GMAIL_USER"] ?? "";
-  const pass = process.env["GMAIL_APP_PASSWORD"] ?? "";
+  const user = credentials?.user || process.env["GMAIL_USER"] || "";
+  const pass = credentials?.pass || process.env["GMAIL_APP_PASSWORD"] || "";
 
   if (!user || !pass) {
-    logger.warn("[gmail] GMAIL_USER or GMAIL_APP_PASSWORD not configured");
+    logger.warn("[gmail] Gmail credentials not configured");
     return { verified: false };
   }
 
@@ -33,7 +34,7 @@ export async function verifyPaymentByEmail(
 
     const lock = await client.getMailboxLock("INBOX");
     try {
-      // Only check emails received in the last 3 hours — prevents reuse of old emails
+      // Only check emails from the last 3 hours — prevents reuse of old emails
       const since = new Date();
       since.setHours(since.getHours() - 3);
 
@@ -58,23 +59,18 @@ export async function verifyPaymentByEmail(
         const bodyText = (parsed.text ?? "") + (typeof parsed.html === "string" ? parsed.html : "");
         const bodyLower = bodyText.toLowerCase();
 
-        // Only process NayaPay payment notification emails
         const isNayaPay =
           /nayapay/i.test(parsed.from?.text ?? "") ||
           /nayapay/i.test(bodyText) ||
           /payment.*received|money.*received|transfer.*received/i.test(bodyText);
         if (!isNayaPay) continue;
 
-        // Extract amount from email
         const amountMatch =
           bodyText.match(/Rs\.?\s*([\d,]+(?:\.\d+)?)/i) ??
           bodyText.match(/PKR\s*([\d,]+(?:\.\d+)?)/i);
         const emailAmount = amountMatch?.[1]?.replace(/,/g, "") ?? "";
 
-        // Check account title (case-insensitive)
         const titleMatches = titleLower.length > 0 && bodyLower.includes(titleLower);
-
-        // Check amount matches
         const amountMatches = !amount || !emailAmount || emailAmount === amount;
 
         logger.info(

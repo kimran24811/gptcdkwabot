@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { getWhatsAppState } from "./whatsapp.js";
+import { waManager } from "./wa-manager.js";
 import {
   getAllSettings,
   setSetting,
@@ -58,7 +58,7 @@ router.post("/admin/settings", (req, res) => {
 router.get("/admin/keys", (req, res) => {
   if (!isAuthorized(req)) { res.status(401).json({ error: "Unauthorized" }); return; }
   const plan = typeof req.query["plan"] === "string" ? req.query["plan"] : undefined;
-  Promise.all([listKeys(plan), getKeyStats()])
+  Promise.all([listKeys(1, plan), getKeyStats(1)])
     .then(([keys, stats]) => res.json({ keys, stats }))
     .catch((e) => res.status(500).json({ error: String(e) }));
 });
@@ -71,36 +71,36 @@ router.post("/admin/keys", (req, res) => {
   }
   if (!keys_text?.trim()) { res.status(400).json({ error: "No keys provided" }); return; }
   const keysList = keys_text.split(/[\n,]+/).map((k: string) => k.trim()).filter(Boolean);
-  addKeys(plan, keysList)
+  addKeys(1, plan, keysList)
     .then((added) => res.json({ ok: true, added }))
     .catch((e) => res.status(500).json({ error: String(e) }));
 });
 
 router.delete("/admin/keys/:id", (req, res) => {
   if (!isAuthorized(req)) { res.status(401).json({ error: "Unauthorized" }); return; }
-  deleteKey(Number(req.params["id"]))
+  deleteKey(1, Number(req.params["id"]))
     .then(() => res.json({ ok: true }))
     .catch((e) => res.status(500).json({ error: String(e) }));
 });
 
 router.get("/admin/payments", (req, res) => {
   if (!isAuthorized(req)) { res.status(401).json({ error: "Unauthorized" }); return; }
-  listPayments()
+  listPayments(1)
     .then((payments) => res.json(payments))
     .catch((e) => res.status(500).json({ error: String(e) }));
 });
 
 router.get("/admin/customers", (req, res) => {
   if (!isAuthorized(req)) { res.status(401).json({ error: "Unauthorized" }); return; }
-  listCustomerBalances()
+  listCustomerBalances(1)
     .then((rows) => res.json(rows))
     .catch((e) => res.status(500).json({ error: String(e) }));
 });
 
 // ── Health ────────────────────────────────────────────────────────────────────
 router.get("/health", (_req: Request, res: Response) => {
-  const { connected } = getWhatsAppState();
-  res.json({ status: "ok", connected });
+  const connected = waManager.getAllConnected().length > 0;
+  res.json({ status: "ok", connected, activeSessions: waManager.getAllConnected().length });
 });
 
 // ── Admin HTML page ───────────────────────────────────────────────────────────
@@ -108,17 +108,13 @@ router.get("/admin", (req: Request, res: Response) => {
   if (!isAuthorized(req)) { res.status(401).send("Unauthorized"); return; }
 
   const token = req.query["token"] as string ?? "";
-  const { connected, qrDataUrl } = getWhatsAppState();
+  const activeSessions = waManager.getAllConnected().length;
 
-  const statusBadge = connected
-    ? `<span class="badge green">● Connected</span>`
-    : `<span class="badge orange">○ Waiting for QR</span>`;
+  const statusBadge = activeSessions > 0
+    ? `<span class="badge green">● ${activeSessions} session${activeSessions > 1 ? "s" : ""} active</span>`
+    : `<span class="badge orange">○ No active sessions</span>`;
 
-  const qrSection = !connected && qrDataUrl
-    ? `<img src="${qrDataUrl}" alt="QR" class="qr-img" />`
-    : connected
-      ? `<p style="color:#555;margin-top:16px;">WhatsApp is connected and ready to receive messages.</p>`
-      : `<p style="color:#888;margin-top:16px;">Generating QR code, please wait...</p>`;
+  const qrSection = `<p style="color:#555;margin-top:16px;">Manage individual bot sessions via the <a href="/platform/" style="color:#4f46e5;text-decoration:underline">Bot Platform</a>.</p>`;
 
   const planOptions = PLAN_CODES.map(
     (c) => `<option value="${c}">${PLAN_LABELS[c]}</option>`

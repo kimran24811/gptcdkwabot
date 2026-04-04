@@ -1,7 +1,7 @@
 import { checkKey, activateKey } from "./cdk.js";
 import { verifyPaymentByEmail } from "./gmail.js";
 import {
-  getSetting,
+  getTenantSetting,
   getAvailableKeys,
   markKeysUsed,
   createPayment,
@@ -49,10 +49,12 @@ interface UserState {
   lastActivity: number;
 }
 
+// State maps keyed by `${tenantId}:${jid}` for tenant isolation
 const userStates = new Map<string, UserState>();
+
 const processedIds = new Set<string>();
 const processedIdQueue: string[] = [];
-const MAX_PROCESSED_IDS = 500;
+const MAX_PROCESSED_IDS = 2000;
 
 const rateLimitMap = new Map<string, number[]>();
 const RATE_LIMIT = 10;
@@ -61,15 +63,16 @@ const STATE_EXPIRY_MS = 30 * 60 * 1000;
 
 setInterval(() => {
   const now = Date.now();
-  for (const [jid, st] of userStates.entries()) {
-    if (now - st.lastActivity > STATE_EXPIRY_MS) userStates.delete(jid);
+  for (const [k, st] of userStates.entries()) {
+    if (now - st.lastActivity > STATE_EXPIRY_MS) userStates.delete(k);
   }
 }, 5 * 60 * 1000);
 
-export function isDuplicate(msgId: string): boolean {
-  if (processedIds.has(msgId)) return true;
-  processedIds.add(msgId);
-  processedIdQueue.push(msgId);
+export function isDuplicate(tenantId: number, msgId: string): boolean {
+  const key = `${tenantId}:${msgId}`;
+  if (processedIds.has(key)) return true;
+  processedIds.add(key);
+  processedIdQueue.push(key);
   if (processedIdQueue.length > MAX_PROCESSED_IDS) {
     const old = processedIdQueue.shift()!;
     processedIds.delete(old);
@@ -77,12 +80,13 @@ export function isDuplicate(msgId: string): boolean {
   return false;
 }
 
-function isRateLimited(jid: string): boolean {
+function isRateLimited(tenantId: number, jid: string): boolean {
+  const key = `${tenantId}:${jid}`;
   const now = Date.now();
-  const ts = (rateLimitMap.get(jid) ?? []).filter((t) => now - t < RATE_WINDOW_MS);
-  if (ts.length >= RATE_LIMIT) { rateLimitMap.set(jid, ts); return true; }
+  const ts = (rateLimitMap.get(key) ?? []).filter((t) => now - t < RATE_WINDOW_MS);
+  if (ts.length >= RATE_LIMIT) { rateLimitMap.set(key, ts); return true; }
   ts.push(now);
-  rateLimitMap.set(jid, ts);
+  rateLimitMap.set(key, ts);
   return false;
 }
 
@@ -117,9 +121,11 @@ function numEmoji(i: number): string {
   return NUM_EMOJI[i] ?? `${i + 1}.`;
 }
 
-async function getPlanMenuMsg(): Promise<string> {
+async function getPlanMenuMsg(tenantId: number): Promise<string> {
   const prices = await Promise.all(
-    PLAN_CODES.map((c) => getSetting(`price_${c}`).then((v) => v ?? PLAN_DEFAULT_PRICES[c]))
+    PLAN_CODES.map((c) =>
+      getTenantSetting(tenantId, `price_${c}`).then((v) => v ?? PLAN_DEFAULT_PRICES[c])
+    )
   );
   return `🛒 *Select a Plan:*
 
@@ -135,13 +141,13 @@ async function getPlanMenuMsg(): Promise<string> {
 Reply with *1*, *2*, or *3*`;
 }
 
-async function calcOrder(plan: PlanCode, qty: number): Promise<{
+async function calcOrder(tenantId: number, plan: PlanCode, qty: number): Promise<{
   basePrice: number;
   discountPct: number;
   discountAmt: number;
   total: number;
 }> {
-  const priceStr = (await getSetting(`price_${plan}`)) ?? PLAN_DEFAULT_PRICES[plan];
+  const priceStr = (await getTenantSetting(tenantId, `price_${plan}`)) ?? PLAN_DEFAULT_PRICES[plan];
   const basePrice = parseInt(priceStr, 10);
   const rate = discountRate(qty);
   const discountAmt = Math.round(basePrice * qty * rate);
@@ -149,10 +155,14 @@ async function calcOrder(plan: PlanCode, qty: number): Promise<{
   return { basePrice, discountPct: Math.round(rate * 100), discountAmt, total };
 }
 
-async function getOrderMsg(plan: PlanCode, qty: number): Promise<{ msg: string; total: number }> {
-  const account = (await getSetting("account_number")) ?? "03022000761";
-  const bank = (await getSetting("bank_name")) ?? "Nayapay";
-  const { basePrice, discountPct, discountAmt, total } = await calcOrder(plan, qty);
+async function getOrderMsg(
+  tenantId: number,
+  plan: PlanCode,
+  qty: number
+): Promise<{ msg: string; total: number }> {
+  const account = (await getTenantSetting(tenantId, "account_number")) ?? "—";
+  const bank = (await getTenantSetting(tenantId, "bank_name")) ?? "Nayapay";
+  const { basePrice, discountPct, discountAmt, total } = await calcOrder(tenantId, plan, qty);
   const label = PLAN_LABELS[plan];
 
   let priceLines: string;
@@ -201,26 +211,27 @@ function keyVerifiedMsg(plan?: string): string {
 }
 
 export async function handleMessage(
+  tenantId: number,
   jid: string,
   text: string,
   sendReply: (msg: string) => Promise<void>
 ): Promise<void> {
-  if (isRateLimited(jid)) {
-    logger.warn({ jid }, "[handler] rate limited");
+  if (isRateLimited(tenantId, jid)) {
+    logger.warn({ tenantId, jid }, "[handler] rate limited");
     return;
   }
 
   const now = Date.now();
-  let state: UserState = userStates.get(jid) ?? { stage: "idle", lastActivity: now };
+  const stateKey = `${tenantId}:${jid}`;
+  let state: UserState = userStates.get(stateKey) ?? { stage: "idle", lastActivity: now };
   state.lastActivity = now;
 
   const trimmed = text.trim();
   const lc = trimmed.toLowerCase();
 
-  // Global reset triggers — including * for menu
   if (["*", "menu", "start", "hi", "hello", "/start"].includes(lc)) {
     state = { stage: "idle", lastActivity: now };
-    userStates.set(jid, state);
+    userStates.set(stateKey, state);
     await sendReply(MAIN_MENU);
     return;
   }
@@ -229,32 +240,32 @@ export async function handleMessage(
   if (state.stage === "idle") {
     if (trimmed === "1") {
       state.stage = "activate_awaiting_key";
-      userStates.set(jid, state);
+      userStates.set(stateKey, state);
       await sendReply("🔑 Please send your CDK activation key.");
       return;
     }
     if (trimmed === "2") {
       state.stage = "purchase_select_plan";
-      userStates.set(jid, state);
-      await sendReply(await getPlanMenuMsg());
+      userStates.set(stateKey, state);
+      await sendReply(await getPlanMenuMsg(tenantId));
       return;
     }
     await sendReply(MAIN_MENU);
-    userStates.set(jid, state);
+    userStates.set(stateKey, state);
     return;
   }
 
   // ── ACTIVATE: awaiting CDK key ────────────────────────────────────────────
   if (state.stage === "activate_awaiting_key") {
     if (!isCdkKeyFormat(trimmed)) {
-      await sendReply("❌ That doesn't look like a valid CDK key. Please send your key (letters and numbers only).\n\nType * for the main menu.");
+      await sendReply("❌ That doesn't look like a valid CDK key. Please send your key.\n\nType * for the main menu.");
       return;
     }
     const result = await checkKey(trimmed);
     if (result.status === "available") {
       state.stage = "activate_awaiting_session";
       state.cdkKey = trimmed;
-      userStates.set(jid, state);
+      userStates.set(stateKey, state);
       await sendReply(keyVerifiedMsg(result.subscription ?? result.product));
     } else if (result.status === "used") {
       await sendReply("❌ This key has already been activated.\n\nType * for the main menu.");
@@ -274,7 +285,7 @@ export async function handleMessage(
       const result = await checkKey(trimmed);
       if (result.status === "available") {
         state.cdkKey = trimmed;
-        userStates.set(jid, state);
+        userStates.set(stateKey, state);
         await sendReply(keyVerifiedMsg(result.subscription ?? result.product));
       } else {
         await sendReply("❌ Invalid key. Please send the session token JSON or a valid CDK key.");
@@ -288,14 +299,14 @@ export async function handleMessage(
     await sendReply("⏳ Activating your account, please wait...");
     const activation = await activateKey(state.cdkKey!, trimmed);
     if (activation.success) {
-      userStates.delete(jid);
+      userStates.delete(stateKey);
       await sendReply(
         `🎉 *Activation Successful!*\n📧 Account: ${activation.email ?? "N/A"}\n📦 Plan: ${activation.subscription ?? activation.product ?? "N/A"}\n\nEnjoy your subscription! 🚀\n\nType * for the main menu.`
       );
     } else {
-      userStates.set(jid, state);
+      userStates.set(stateKey, state);
       await sendReply(
-        `❌ Activation failed: ${activation.errorMessage ?? "Unknown error"}\n\nMake sure you copied the complete JSON from chat.openai.com/api/auth/session and try again, or send a new CDK key.`
+        `❌ Activation failed: ${activation.errorMessage ?? "Unknown error"}\n\nMake sure you copied the complete JSON from chat.openai.com/api/auth/session and try again.`
       );
     }
     return;
@@ -310,12 +321,12 @@ export async function handleMessage(
     };
     const plan = planByChoice[trimmed];
     if (!plan) {
-      await sendReply(`⚠️ Please reply with *1*, *2*, or *3*:\n\n${await getPlanMenuMsg()}`);
+      await sendReply(`⚠️ Please reply with *1*, *2*, or *3*:\n\n${await getPlanMenuMsg(tenantId)}`);
       return;
     }
     state.selectedPlan = plan;
     state.stage = "purchase_awaiting_qty";
-    userStates.set(jid, state);
+    userStates.set(stateKey, state);
     await sendReply(`✅ *${PLAN_LABELS[plan]}* selected! 🎯\n\n🔢 How many keys do you need? _(1–50)_`);
     return;
   }
@@ -327,13 +338,13 @@ export async function handleMessage(
       await sendReply("⚠️ Please enter a number between *1* and *50*.");
       return;
     }
-    const { msg, total } = await getOrderMsg(state.selectedPlan!, qty);
+    const { msg, total } = await getOrderMsg(tenantId, state.selectedPlan!, qty);
     state.expectedQty = qty;
     state.expectedTotal = total;
     state.internalRef = randomUUID();
     state.stage = "purchase_awaiting_amount";
-    userStates.set(jid, state);
-    await createPayment(jid, state.internalRef).catch(() => {});
+    userStates.set(stateKey, state);
+    await createPayment(tenantId, jid, state.internalRef).catch(() => {});
     await sendReply(msg);
     return;
   }
@@ -353,7 +364,7 @@ export async function handleMessage(
       return;
     }
     state.stage = "purchase_awaiting_title";
-    userStates.set(jid, state);
+    userStates.set(stateKey, state);
     await sendReply(
       `✅ Amount: Rs. *${fmt(paid)}*\n\n👤 Now please send your *NayaPay account title* (the name on your account).\n\nExample: *Muhammad Ali*`
     );
@@ -369,66 +380,71 @@ export async function handleMessage(
     await updatePaymentDetails(state.internalRef!, trimmed, String(state.expectedTotal ?? "")).catch(() => {});
     await sendReply("⏳ Verifying your payment, please wait...");
 
-    const result = await verifyPaymentByEmail(trimmed, String(state.expectedTotal ?? ""));
+    // Get tenant's Gmail credentials
+    const gmailUser = (await getTenantSetting(tenantId, "gmail_user")) ?? "";
+    const gmailPass = (await getTenantSetting(tenantId, "gmail_password")) ?? "";
+    const gmailConfigured = !!(gmailUser && gmailPass);
+
+    const result = await verifyPaymentByEmail(
+      trimmed,
+      String(state.expectedTotal ?? ""),
+      gmailConfigured ? { user: gmailUser, pass: gmailPass } : undefined
+    );
 
     if (!result.verified) {
-      const gmailConfigured = !!(process.env["GMAIL_USER"] && process.env["GMAIL_APP_PASSWORD"]);
       if (!gmailConfigured) {
-        logger.warn({ jid }, "[handler] Gmail not configured — skipping auto-verify");
-        state.stage = "purchase_awaiting_title";
-        userStates.set(jid, state);
         await sendReply("⚠️ Automatic verification is not available right now. Please contact support.\n\nType * for the main menu.");
+        state = { stage: "idle", lastActivity: now };
+        userStates.set(stateKey, state);
       } else {
         await sendReply(
-          `❌ Could not verify your payment.\n\nPlease double-check:\n• 💵 Amount paid: *Rs. ${fmt(state.expectedTotal!)}*\n• 👤 Your exact NayaPay account title\n\nResend your account title to try again, or type * for the main menu.`
+          `❌ Could not verify your payment.\n\nPlease check:\n• 💵 Amount paid: *Rs. ${fmt(state.expectedTotal!)}*\n• 👤 Your exact NayaPay account title\n\nResend your account title to try again, or type * for the main menu.`
         );
         state.stage = "purchase_awaiting_title";
-        userStates.set(jid, state);
+        userStates.set(stateKey, state);
       }
       return;
     }
 
-    // ── Fraud check: claim this email — prevents reuse ────────────────────
+    // Fraud check: claim email so it can't be reused
     if (result.messageId) {
       const claimed = await claimEmailMessageId(state.internalRef!, result.messageId);
       if (!claimed) {
-        logger.warn({ jid, messageId: result.messageId }, "[handler] Duplicate email claim rejected");
+        logger.warn({ tenantId, jid, messageId: result.messageId }, "[handler] Duplicate email claim rejected");
         await sendReply(
           `❌ This payment has already been used for a previous order.\n\nIf you believe this is an error, please contact support.\n\nType * for the main menu.`
         );
         state = { stage: "idle", lastActivity: now };
-        userStates.set(jid, state);
+        userStates.set(stateKey, state);
         return;
       }
     }
 
-    // Payment verified and claimed — deliver keys
-    logger.info({ jid, plan: state.selectedPlan, qty: state.expectedQty, total: state.expectedTotal }, "[handler] Payment verified and claimed");
-
-    const keys = await getAvailableKeys(state.selectedPlan!, state.expectedQty!);
+    // Deliver keys
+    const keys = await getAvailableKeys(tenantId, state.selectedPlan!, state.expectedQty!);
     if (keys.length === 0) {
-      await sendReply("😔 Sorry, no keys are currently available for this plan. Please contact support.\n\nType * for the main menu.");
+      await sendReply("😔 Sorry, no keys are available right now. Please contact support.\n\nType * for the main menu.");
       state = { stage: "idle", lastActivity: now };
-      userStates.set(jid, state);
+      userStates.set(stateKey, state);
       return;
     }
     if (keys.length < state.expectedQty!) {
-      await sendReply(`⚠️ Only ${keys.length} key${keys.length > 1 ? "s" : ""} available for this plan. Sending what we have!`);
+      await sendReply(`⚠️ Only ${keys.length} key${keys.length > 1 ? "s" : ""} available. Sending what we have!`);
     }
 
-    await markKeysUsed(keys.map((k) => k.id), jid);
+    await markKeysUsed(tenantId, keys.map((k) => k.id), jid);
     await verifyPayment(
       state.internalRef!,
       state.selectedPlan!,
       keys.length,
       keys.map((k) => k.key_value)
     ).catch(() => {});
-    await updateCustomerBalance(jid, state.expectedTotal!, keys.length).catch(() => {});
+    await updateCustomerBalance(tenantId, jid, state.expectedTotal!, keys.length).catch(() => {});
 
     const planLabel = PLAN_LABELS[state.selectedPlan!];
     const keyList = keys.map((k, i) => `${numEmoji(i)} *${k.key_value}*`).join("\n");
 
-    userStates.delete(jid);
+    userStates.delete(stateKey);
     await sendReply(
       `🎉 *Here ${keys.length === 1 ? "is your" : "are your"} ${planLabel} key${keys.length > 1 ? "s" : ""}:* 🔑\n\n` +
       `${keyList}\n\n` +
@@ -439,7 +455,6 @@ export async function handleMessage(
     return;
   }
 
-  // Fallback
   await sendReply(MAIN_MENU);
-  userStates.set(jid, { stage: "idle", lastActivity: now });
+  userStates.set(stateKey, { stage: "idle", lastActivity: now });
 }
