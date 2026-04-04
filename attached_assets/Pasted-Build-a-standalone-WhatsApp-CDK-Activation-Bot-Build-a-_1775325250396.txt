@@ -1,0 +1,154 @@
+Build a standalone WhatsApp CDK Activation Bot
+
+Build a production-ready WhatsApp bot using Node.js + TypeScript that allows customers to activate ChatGPT subscriptions by sending their CDK key and session token over WhatsApp direct messages.
+
+Tech Stack
+
+Runtime: Node.js 20 with TypeScript (use tsx for dev, compile to JS for prod)
+WhatsApp: @whiskeysockets/baileys (free, no monthly fees, connects via WhatsApp Web protocol)
+QR web UI: Express.js serving a simple HTML page that shows the QR code for scanning
+Storage: In-memory (Map) for conversation state — no database needed initially
+QR image: qrcode npm package to convert QR string to PNG data URL
+Environment Variables (set as Replit Secrets)
+
+CDK_API_BASE — the CDK API base URL (e.g. https://keys.ovh/api/v1)
+CDK_API_KEY — the API key for the CDK service (you will provide this)
+PORT — defaults to 3000
+ADMIN_TOKEN — a secret string to protect the admin QR page (you choose)
+Core Features
+
+1. WhatsApp Connection (Baileys)
+
+On startup, load auth state from ./wa-auth/ folder using useMultiFileAuthState
+If not authenticated, generate a QR code and expose it via the web UI
+On connection, log [whatsapp] Connected as {phone number}
+Auto-reconnect on disconnect (unless logged out — then clear wa-auth/ and regenerate QR)
+Only process direct messages (@s.whatsapp.net JIDs) — completely ignore group chats (@g.us) and broadcast lists
+2. Conversation State Machine
+Each user has a state stored in a Map<string, UserState>:
+
+type Stage = "idle" | "awaiting_session"
+type UserState = { stage: Stage; cdkKey?: string; lastActivity: number }
+
+States expire after 30 minutes of inactivity (clean up with setInterval)
+3. Message Handler Flow
+
+Stage: idle
+
+User sends any message
+Check if it looks like a CDK key: length >= 6, no spaces, alphanumeric/dash/underscore characters only
+If yes: call CDK API to check key status
+available → set state to awaiting_session, store key, reply with instructions to get session token
+used → reply "❌ This key has already been activated."
+expired → reply "❌ This key has expired."
+invalid → reply "❌ Invalid key."
+API error → reply "⚠️ Could not verify the key right now. Please try again."
+If not a key format → reply with welcome message explaining how to use the bot
+Stage: awaiting_session
+
+User sends another message
+Check if it looks like ANOTHER CDK key (short, no spaces, no JSON markers): if so, check it via API and switch to it if valid, re-explain session token
+Otherwise, treat it as the ChatGPT session token (JSON from chat.openai.com/api/auth/session)
+Validate it contains "accessToken" or "user" fields
+If invalid format → re-explain how to get session token, keep state
+If valid: call CDK activation API with the key + session token
+On success: delete state, reply with success message including email/plan if returned
+On failure: reply with error message and offer to try again or send a new key
+4. CDK API Integration
+Use fetch for all API calls with Authorization: Bearer {CDK_API_KEY} header.
+
+Key status check:
+
+GET {CDK_API_BASE}/key/{encodedKey}/status
+Response: { success: boolean, data: { status: "available"|"used"|"expired", type?: string } }
+
+Key activation:
+
+POST {CDK_API_BASE}/key/activate
+Body: { key: string, sessionToken: string }
+Response: { success: boolean, data?: { email?: string, subscription?: string }, message?: string }
+
+5. Admin Web UI (Express)
+
+GET / — protected by ?token=ADMIN_TOKEN query param or Authorization header
+Shows a simple HTML page with:
+Connection status (green "Connected" badge or orange "Waiting for QR")
+If waiting: displays the QR code image (base64 PNG)
+Auto-refreshes every 4 seconds via <meta http-equiv="refresh">
+No frontend framework needed — plain HTML + inline CSS is fine
+GET /health — unprotected, returns {"status":"ok","connected":true/false}
+6. Messages to Send
+
+Welcome (idle, non-key message):
+
+👋 Welcome to ChatGPT CDK Activation Bot!
+Send me your CDK activation key to get started.
+
+Key verified:
+
+✅ Key verified! ({plan type if available})
+Now I need your ChatGPT session token to activate your account.
+📋 How to get it:
+1. Open a browser and go to:
+   chat.openai.com/api/auth/session
+2. You'll see a page with JSON text starting with {"user":...
+3. Select ALL the text and send it here
+⚠️ This is different from your CDK key — it's a long JSON from that URL.
+
+Processing:
+
+⏳ Activating your account, please wait...
+
+Success:
+
+🎉 Your ChatGPT account has been activated successfully!
+📧 Account: {email}
+📦 Plan: {plan}
+Enjoy your subscription! 🚀
+
+Failure:
+
+❌ Activation failed: {error message}
+Please make sure you copied the complete JSON from chat.openai.com/api/auth/session and try again.
+Or send a new CDK key to start over.
+
+Project Structure
+
+/
+├── src/
+│   ├── index.ts          # Express server + startup
+│   ├── whatsapp.ts       # Baileys connection, QR, message events
+│   ├── handler.ts        # Conversation state machine + message logic
+│   ├── cdk.ts            # CDK API calls (checkKey, activateKey)
+│   └── admin.ts          # Express routes for admin QR page + health
+├── wa-auth/              # Baileys auth state (gitignored)
+├── .gitignore            # Include: node_modules, wa-auth/, dist/
+├── package.json
+└── tsconfig.json
+
+Important Implementation Notes
+
+Baileys is ESM-only — if you use a CommonJS build, load it with new Function('s', 'return import(s)')("@whiskeysockets/baileys") to prevent the bundler from converting the import() to require(). Alternatively run the project with tsx (no build) which handles ESM natively.
+
+Silent logger — pass a custom logger to makeWASocket that suppresses trace and debug level logs (they are very noisy). Only log info, warn, error.
+
+Message deduplication — Baileys can deliver the same message twice on reconnect. Track the last 100 processed message IDs in a Set and skip duplicates.
+
+wa-auth persistence — On Replit, the filesystem persists between restarts (unlike Render/Heroku). So the QR only needs to be scanned once. Add wa-auth/ to .gitignore so auth tokens aren't committed to GitHub.
+
+Graceful shutdown — listen for SIGTERM/SIGINT and call sock.end() to close the WebSocket cleanly.
+
+Rate limiting — add a simple per-JID rate limiter: max 10 messages per minute per user to prevent abuse.
+
+Replit-specific Setup
+
+Set the run command to: npx tsx src/index.ts
+Set PORT to 3000 in the workflow
+Map external port 80 → internal port 3000 in .replit
+The admin QR page will be accessible at your Replit dev URL
+Out of scope for this agent (you will handle separately)
+
+Payment integration
+User accounts or database
+Multi-bot / multi-number support
+Any web dashboard beyond the simple QR admin page
