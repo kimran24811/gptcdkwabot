@@ -8,7 +8,6 @@ export interface VerifyResult {
 }
 
 export async function verifyPaymentByEmail(
-  txid: string,
   acctLast4: string,
   amount: string
 ): Promise<VerifyResult> {
@@ -33,54 +32,64 @@ export async function verifyPaymentByEmail(
 
     const lock = await client.getMailboxLock("INBOX");
     try {
+      // Search last 3 days for NayaPay payment emails
       const since = new Date();
-      since.setDate(since.getDate() - 7);
+      since.setDate(since.getDate() - 3);
 
-      const uids = await client.search({ since, body: txid });
+      // Search by the amount string to narrow results
+      const uids = await client.search({ since, body: amount });
 
       if (!uids || uids.length === 0) {
-        logger.warn({ txid }, "[gmail] No email found for txid");
+        logger.warn({ amount, acctLast4 }, "[gmail] No emails found matching amount");
         return { verified: false };
       }
 
-      const uid = uids[uids.length - 1];
-      const msg = await client.fetchOne(String(uid), { source: true });
-      if (!msg) return { verified: false };
-      const source = (msg as unknown as { source?: Buffer }).source;
-      if (!source) return { verified: false };
+      // Check from most recent to oldest
+      for (let i = uids.length - 1; i >= 0; i--) {
+        const uid = uids[i];
+        const msg = await client.fetchOne(String(uid), { source: true });
+        if (!msg) continue;
+        const source = (msg as unknown as { source?: Buffer }).source;
+        if (!source) continue;
 
-      const parsed = await simpleParser(source);
-      const bodyText = (parsed.text ?? "") + (typeof parsed.html === "string" ? parsed.html : "");
+        const parsed = await simpleParser(source);
+        const bodyText = (parsed.text ?? "") + (typeof parsed.html === "string" ? parsed.html : "");
 
-      // Verify TxID is present
-      if (!bodyText.includes(txid)) return { verified: false };
+        // Only process NayaPay payment notification emails
+        const isNayaPay =
+          /nayapay/i.test(parsed.from?.text ?? "") ||
+          /nayapay/i.test(bodyText) ||
+          /payment.*received|money.*received|transfer.*received/i.test(bodyText);
+        if (!isNayaPay) continue;
 
-      // Extract last 4 digits of sender account number
-      // NayaPay emails show patterns like:
-      //   "Account ●●●●1234", "Acc. No. XXXX1234", "account ending in 1234"
-      const acctMatch =
-        bodyText.match(/[Aa]cc(?:ount)?[^0-9]{0,40}●+\s*(\d{4})/i) ??
-        bodyText.match(/[Aa]cc(?:ount)?[^0-9]{0,40}(\d{4})\b/i) ??
-        bodyText.match(/●{1,12}(\d{4})/);
-      const foundAcct4 = acctMatch?.[1] ?? "";
+        // Extract last 4 digits of sender account number
+        const acctMatch =
+          bodyText.match(/[Aa]cc(?:ount)?[^0-9]{0,40}●+\s*(\d{4})/i) ??
+          bodyText.match(/[Ss]ource[^0-9]{0,40}●+\s*(\d{4})/i) ??
+          bodyText.match(/●{1,12}(\d{4})/);
+        const foundAcct4 = acctMatch?.[1] ?? "";
 
-      logger.info({ txid, foundAcct4, provided: acctLast4 }, "[gmail] Account last-4 match result");
+        // Extract amount from email
+        const amountMatch =
+          bodyText.match(/Rs\.?\s*([\d,]+(?:\.\d+)?)/i) ??
+          bodyText.match(/PKR\s*([\d,]+(?:\.\d+)?)/i);
+        const emailAmount = amountMatch?.[1]?.replace(/,/g, "") ?? "";
 
-      if (foundAcct4 !== acctLast4) return { verified: false };
+        logger.info(
+          { uid, foundAcct4, providedAcct4: acctLast4, emailAmount, providedAmount: amount },
+          "[gmail] Checking email"
+        );
 
-      // Extract and verify amount
-      const amountMatch =
-        bodyText.match(/Rs\.?\s*([\d,]+(?:\.\d+)?)/i) ??
-        bodyText.match(/PKR\s*([\d,]+(?:\.\d+)?)/i);
-      const emailAmount = amountMatch?.[1]?.replace(/,/g, "") ?? "";
+        const acctMatches = foundAcct4 === acctLast4;
+        const amountMatches = !amount || !emailAmount || emailAmount === amount;
 
-      logger.info({ txid, emailAmount, provided: amount }, "[gmail] Amount match result");
-
-      if (amount && emailAmount && emailAmount !== amount) {
-        return { verified: false };
+        if (acctMatches && amountMatches) {
+          return { verified: true, amount: emailAmount || amount };
+        }
       }
 
-      return { verified: true, amount: emailAmount || amount };
+      logger.warn({ amount, acctLast4 }, "[gmail] No matching email found after checking all candidates");
+      return { verified: false };
     } finally {
       lock.release();
     }

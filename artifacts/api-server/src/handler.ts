@@ -9,12 +9,12 @@ import {
   verifyPayment,
 } from "./db.js";
 import { logger } from "./lib/logger.js";
+import { randomUUID } from "crypto";
 
 type Stage =
   | "idle"
   | "activate_awaiting_key"
   | "activate_awaiting_session"
-  | "purchase_awaiting_txid"
   | "purchase_awaiting_amount"
   | "purchase_awaiting_acct4"
   | "purchase_select_plan"
@@ -32,7 +32,7 @@ export const PLAN_LABELS: Record<PlanCode, string> = {
 interface UserState {
   stage: Stage;
   cdkKey?: string;
-  txid?: string;
+  internalRef?: string;
   amount?: string;
   selectedPlan?: PlanCode;
   lastActivity: number;
@@ -116,9 +116,9 @@ async function getPaymentInfo(): Promise<string> {
 🏦 Bank: ${bank}
 📱 Account Number: *${account}*
 
-Please send your payment and reply with your *Transaction ID (TxID)*.
+Please send your payment and then reply with the *amount* you paid.
 
-Example: TMICFBPK040426048010987751`;
+Example: *500*`;
 }
 
 function keyVerifiedMsg(plan?: string): string {
@@ -169,8 +169,10 @@ export async function handleMessage(
       return;
     }
     if (trimmed === "2") {
-      state.stage = "purchase_awaiting_txid";
+      state.stage = "purchase_awaiting_amount";
+      state.internalRef = randomUUID();
       userStates.set(jid, state);
+      await createPayment(jid, state.internalRef).catch(() => {});
       await sendReply(await getPaymentInfo());
       return;
     }
@@ -237,34 +239,18 @@ export async function handleMessage(
     return;
   }
 
-  // ── PURCHASE: awaiting TxID ───────────────────────────────────────────────
-  if (state.stage === "purchase_awaiting_txid") {
-    if (trimmed.length < 8) {
-      await sendReply("⚠️ That doesn't look like a valid Transaction ID. Please send the full TxID from your payment confirmation.");
-      return;
-    }
-    state.txid = trimmed;
-    state.stage = "purchase_awaiting_amount";
-    userStates.set(jid, state);
-    await createPayment(jid, trimmed).catch(() => {});
-    await sendReply(
-      `✅ Got it!\n\nPlease enter the *amount* you paid (numbers only).\n\nExample: *500*`
-    );
-    return;
-  }
-
   // ── PURCHASE: awaiting amount ─────────────────────────────────────────────
   if (state.stage === "purchase_awaiting_amount") {
     const amountClean = trimmed.replace(/[^0-9.]/g, "");
-    if (!amountClean || isNaN(Number(amountClean))) {
-      await sendReply("⚠️ Please enter a valid amount (numbers only). Example: *500*");
+    if (!amountClean || isNaN(Number(amountClean)) || Number(amountClean) <= 0) {
+      await sendReply("⚠️ Please enter the amount you paid (numbers only).\n\nExample: *500*");
       return;
     }
     state.amount = amountClean;
     state.stage = "purchase_awaiting_acct4";
     userStates.set(jid, state);
     await sendReply(
-      `✅ Amount: Rs. *${amountClean}*\n\nNow please send the *last 4 digits* of your *account number* to verify your payment.\n\nThis is shown in your NayaPay payment confirmation email.`
+      `✅ Amount: Rs. *${amountClean}*\n\nNow please send the *last 4 digits* of your *account number*.\n\nThis is shown in your NayaPay payment confirmation email.`
     );
     return;
   }
@@ -275,33 +261,32 @@ export async function handleMessage(
       await sendReply("⚠️ Please enter exactly *4 digits* (the last 4 digits of your account number).");
       return;
     }
-    await updatePaymentDetails(state.txid!, trimmed, state.amount ?? "").catch(() => {});
+    await updatePaymentDetails(state.internalRef!, trimmed, state.amount ?? "").catch(() => {});
     await sendReply("⏳ Verifying your payment, please wait...");
 
-    const result = await verifyPaymentByEmail(state.txid!, trimmed, state.amount ?? "");
+    const result = await verifyPaymentByEmail(trimmed, state.amount ?? "");
 
     if (!result.verified) {
       const gmailConfigured = !!(process.env["GMAIL_USER"] && process.env["GMAIL_APP_PASSWORD"]);
       if (!gmailConfigured) {
-        logger.warn({ jid, txid: state.txid }, "[handler] Gmail not configured — skipping auto-verify");
+        logger.warn({ jid }, "[handler] Gmail not configured — skipping auto-verify");
         state.stage = "purchase_select_plan";
         userStates.set(jid, state);
         await sendReply(
-          `⚠️ Automatic verification is being set up. Your payment details have been recorded and will be reviewed shortly.\n\nMeanwhile, please select your plan:\n\n${PLAN_MENU}`
+          `⚠️ Automatic verification is being set up. Your payment details have been recorded.\n\nMeanwhile, please select your plan:\n\n${PLAN_MENU}`
         );
       } else {
         await sendReply(
-          `❌ Could not verify your payment.\n\nPlease double-check:\n• Transaction ID: *${state.txid}*\n• Amount paid\n• Last 4 digits of your account number\n\nType *menu* to start over or try again.`
+          `❌ Could not verify your payment.\n\nPlease double-check:\n• Amount paid\n• Last 4 digits of your account number\n\nType *menu* to start over or try again.`
         );
-        state.stage = "purchase_awaiting_txid";
-        state.txid = undefined;
+        state.stage = "purchase_awaiting_amount";
         state.amount = undefined;
         userStates.set(jid, state);
       }
       return;
     }
 
-    logger.info({ jid, txid: state.txid, ...result }, "[handler] Payment verified via email");
+    logger.info({ jid, ...result }, "[handler] Payment verified via email");
     state.stage = "purchase_select_plan";
     userStates.set(jid, state);
     await sendReply(
@@ -349,7 +334,7 @@ export async function handleMessage(
     }
 
     await markKeysUsed(keys.map((k) => k.id), jid);
-    await verifyPayment(state.txid!, state.selectedPlan!, keys.length, keys.map((k) => k.key_value)).catch(() => {});
+    await verifyPayment(state.internalRef!, state.selectedPlan!, keys.length, keys.map((k) => k.key_value)).catch(() => {});
 
     const planLabel = PLAN_LABELS[state.selectedPlan!];
     const keyList = keys.map((k, i) => `${i + 1}. ${k.key_value}`).join("\n");
