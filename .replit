@@ -30,3 +30,4 @@ timeoutMs = 20000
 [userenv.shared]
 ADMIN_TOKEN = "9abf5bb3cfb61cae555e201dcccbd6fbabae9c29420d29df"
 CDK_API_BASE = "https://keys.ovh/api/v1"
+GMAIL_USER = "emraankhalid2046@gmail.com"
