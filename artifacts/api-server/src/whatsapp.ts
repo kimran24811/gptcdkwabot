@@ -103,8 +103,9 @@ async function connect(): Promise<void> {
 
       if (fromMe) continue;
 
-      // Only handle direct messages
-      if (!jid.endsWith("@s.whatsapp.net")) continue;
+      // Only handle direct messages — accept both @s.whatsapp.net and @lid (WhatsApp LID addressing)
+      const isDM = jid.endsWith("@s.whatsapp.net") || jid.endsWith("@lid");
+      if (!isDM) continue;
 
       const msgId = msg.key.id ?? "";
       if (isDuplicate(msgId)) {
