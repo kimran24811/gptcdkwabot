@@ -26,17 +26,9 @@ export function getWhatsAppState(): WhatsAppState {
   return { ...state };
 }
 
-// Baileys logger shim: only emit info/warn/error to our pino logger
-const baileysLogger = {
-  level: "silent",
-  trace: () => {},
-  debug: () => {},
-  info: (obj: unknown, msg?: string) => logger.info({ baileys: obj }, msg ?? ""),
-  warn: (obj: unknown, msg?: string) => logger.warn({ baileys: obj }, msg ?? ""),
-  error: (obj: unknown, msg?: string) => logger.error({ baileys: obj }, msg ?? ""),
-  fatal: (obj: unknown, msg?: string) => logger.error({ baileys: obj }, msg ?? ""),
-  child: () => baileysLogger,
-};
+// Suppress noisy Baileys trace/debug logs by using a pino child at 'info' level.
+// The child logger is a real pino.Logger so it satisfies Baileys' expected type.
+const baileysLogger = logger.child({ module: "baileys" });
 
 async function connect(): Promise<void> {
   const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -45,8 +37,7 @@ async function connect(): Promise<void> {
   const sock: WASocket = makeWASocket({
     version,
     auth: authState,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    logger: baileysLogger as any,
+    logger: baileysLogger,
     printQRInTerminal: false,
     markOnlineOnConnect: false,
   });

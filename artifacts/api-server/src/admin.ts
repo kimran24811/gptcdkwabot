@@ -5,7 +5,7 @@ const router: IRouter = Router();
 
 function isAuthorized(req: Request): boolean {
   const adminToken = process.env["ADMIN_TOKEN"] ?? "";
-  if (!adminToken) return true; // no token configured = open (should not happen)
+  if (!adminToken) return false; // no token configured = deny by default
 
   const queryToken = req.query["token"];
   if (queryToken === adminToken) return true;

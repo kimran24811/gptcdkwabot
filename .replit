@@ -28,5 +28,3 @@ timeoutMs = 20000
 [userenv]
 
 [userenv.shared]
-CDK_API_BASE = "https://keys.ovh/api/v1"
-ADMIN_TOKEN = "9abf5bb3cfb61cae555e201dcccbd6fbabae9c29420d29df"
