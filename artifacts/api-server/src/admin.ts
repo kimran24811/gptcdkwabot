@@ -16,6 +16,15 @@ function isAuthorized(req: Request): boolean {
   return false;
 }
 
+router.get("/", (_req: Request, res: Response) => {
+  const token = process.env["ADMIN_TOKEN"] ?? "";
+  if (token) {
+    res.redirect(`/api/admin?token=${encodeURIComponent(token)}`);
+  } else {
+    res.redirect("/api/admin");
+  }
+});
+
 router.get("/admin", (req: Request, res: Response) => {
   if (!isAuthorized(req)) {
     res.status(401).send("Unauthorized");
