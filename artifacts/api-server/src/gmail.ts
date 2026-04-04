@@ -4,13 +4,13 @@ import { logger } from "./lib/logger.js";
 
 export interface VerifyResult {
   verified: boolean;
-  senderName?: string;
   amount?: string;
 }
 
 export async function verifyPaymentByEmail(
   txid: string,
-  raastLast4: string
+  acctLast4: string,
+  amount: string
 ): Promise<VerifyResult> {
   const user = process.env["GMAIL_USER"] ?? "";
   const pass = process.env["GMAIL_APP_PASSWORD"] ?? "";
@@ -52,30 +52,35 @@ export async function verifyPaymentByEmail(
       const parsed = await simpleParser(source);
       const bodyText = (parsed.text ?? "") + (typeof parsed.html === "string" ? parsed.html : "");
 
-      const hasTxid = bodyText.includes(txid);
-      if (!hasTxid) return { verified: false };
+      // Verify TxID is present
+      if (!bodyText.includes(txid)) return { verified: false };
 
-      // Extract last 4 digits of Raast ID / IBAN from the email
-      // NayaPay format: "Raast ID / IBAN ●●●●3196"
-      const raastMatch =
-        bodyText.match(/Raast[^0-9]{0,30}(\d{4})/i) ??
-        bodyText.match(/IBAN[^0-9]{0,30}(\d{4})/i) ??
-        bodyText.match(/●{1,10}(\d{4})/);
-      const foundLast4 = raastMatch?.[1] ?? "";
+      // Extract last 4 digits of sender account number
+      // NayaPay emails show patterns like:
+      //   "Account ●●●●1234", "Acc. No. XXXX1234", "account ending in 1234"
+      const acctMatch =
+        bodyText.match(/[Aa]cc(?:ount)?[^0-9]{0,40}●+\s*(\d{4})/i) ??
+        bodyText.match(/[Aa]cc(?:ount)?[^0-9]{0,40}(\d{4})\b/i) ??
+        bodyText.match(/●{1,12}(\d{4})/);
+      const foundAcct4 = acctMatch?.[1] ?? "";
 
-      logger.info({ txid, foundLast4, provided: raastLast4 }, "[gmail] Raast match result");
+      logger.info({ txid, foundAcct4, provided: acctLast4 }, "[gmail] Account last-4 match result");
 
-      if (foundLast4 !== raastLast4) return { verified: false };
+      if (foundAcct4 !== acctLast4) return { verified: false };
 
-      const amountMatch = bodyText.match(/Rs\.?\s*([\d,]+)/i);
-      const amount = amountMatch?.[1]?.replace(",", "") ?? "";
+      // Extract and verify amount
+      const amountMatch =
+        bodyText.match(/Rs\.?\s*([\d,]+(?:\.\d+)?)/i) ??
+        bodyText.match(/PKR\s*([\d,]+(?:\.\d+)?)/i);
+      const emailAmount = amountMatch?.[1]?.replace(/,/g, "") ?? "";
 
-      const senderMatch =
-        bodyText.match(/Source Acc\. Title[:\s]+([^\n<]+)/i) ??
-        bodyText.match(/Sender[:\s]+([^\n<]+)/i);
-      const senderName = senderMatch?.[1]?.trim() ?? "";
+      logger.info({ txid, emailAmount, provided: amount }, "[gmail] Amount match result");
 
-      return { verified: true, senderName, amount };
+      if (amount && emailAmount && emailAmount !== amount) {
+        return { verified: false };
+      }
+
+      return { verified: true, amount: emailAmount || amount };
     } finally {
       lock.release();
     }

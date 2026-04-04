@@ -5,7 +5,7 @@ import {
   getAvailableKeys,
   markKeysUsed,
   createPayment,
-  updatePaymentRaast,
+  updatePaymentDetails,
   verifyPayment,
 } from "./db.js";
 import { logger } from "./lib/logger.js";
@@ -15,7 +15,8 @@ type Stage =
   | "activate_awaiting_key"
   | "activate_awaiting_session"
   | "purchase_awaiting_txid"
-  | "purchase_awaiting_raast"
+  | "purchase_awaiting_amount"
+  | "purchase_awaiting_acct4"
   | "purchase_select_plan"
   | "purchase_awaiting_qty";
 
@@ -32,6 +33,7 @@ interface UserState {
   stage: Stage;
   cdkKey?: string;
   txid?: string;
+  amount?: string;
   selectedPlan?: PlanCode;
   lastActivity: number;
 }
@@ -109,11 +111,9 @@ Reply with *1*, *2*, or *3*`;
 async function getPaymentInfo(): Promise<string> {
   const account = (await getSetting("account_number")) ?? "03022000761";
   const bank = (await getSetting("bank_name")) ?? "Nayapay";
-  const title = (await getSetting("account_title")) ?? "Khalid Imran";
   return `💳 *Payment Details*
 
 🏦 Bank: ${bank}
-👤 Account Title: ${title}
 📱 Account Number: *${account}*
 
 Please send your payment and reply with your *Transaction ID (TxID)*.
@@ -244,31 +244,46 @@ export async function handleMessage(
       return;
     }
     state.txid = trimmed;
-    state.stage = "purchase_awaiting_raast";
+    state.stage = "purchase_awaiting_amount";
     userStates.set(jid, state);
     await createPayment(jid, trimmed).catch(() => {});
     await sendReply(
-      `✅ Got it!\n\nNow please tell me the *last 4 digits* of your *Raast ID / IBAN* to verify your payment.\n\nThis is shown in your payment confirmation email as: ●●●●*XXXX*`
+      `✅ Got it!\n\nPlease enter the *amount* you paid (numbers only).\n\nExample: *500*`
     );
     return;
   }
 
-  // ── PURCHASE: awaiting Raast last 4 ──────────────────────────────────────
-  if (state.stage === "purchase_awaiting_raast") {
-    if (!/^\d{4}$/.test(trimmed)) {
-      await sendReply("⚠️ Please enter exactly *4 digits* (the last 4 digits of your Raast ID / IBAN).");
+  // ── PURCHASE: awaiting amount ─────────────────────────────────────────────
+  if (state.stage === "purchase_awaiting_amount") {
+    const amountClean = trimmed.replace(/[^0-9.]/g, "");
+    if (!amountClean || isNaN(Number(amountClean))) {
+      await sendReply("⚠️ Please enter a valid amount (numbers only). Example: *500*");
       return;
     }
-    await updatePaymentRaast(state.txid!, trimmed).catch(() => {});
+    state.amount = amountClean;
+    state.stage = "purchase_awaiting_acct4";
+    userStates.set(jid, state);
+    await sendReply(
+      `✅ Amount: Rs. *${amountClean}*\n\nNow please send the *last 4 digits* of your *account number* to verify your payment.\n\nThis is shown in your NayaPay payment confirmation email.`
+    );
+    return;
+  }
+
+  // ── PURCHASE: awaiting account last 4 ────────────────────────────────────
+  if (state.stage === "purchase_awaiting_acct4") {
+    if (!/^\d{4}$/.test(trimmed)) {
+      await sendReply("⚠️ Please enter exactly *4 digits* (the last 4 digits of your account number).");
+      return;
+    }
+    await updatePaymentDetails(state.txid!, trimmed, state.amount ?? "").catch(() => {});
     await sendReply("⏳ Verifying your payment, please wait...");
 
-    const result = await verifyPaymentByEmail(state.txid!, trimmed);
+    const result = await verifyPaymentByEmail(state.txid!, trimmed, state.amount ?? "");
 
     if (!result.verified) {
       const gmailConfigured = !!(process.env["GMAIL_USER"] && process.env["GMAIL_APP_PASSWORD"]);
       if (!gmailConfigured) {
-        // Gmail not set up yet — allow manual fallthrough so admin can verify manually
-        logger.warn({ jid, txid: state.txid, raast: trimmed }, "[handler] Gmail not configured — skipping auto-verify");
+        logger.warn({ jid, txid: state.txid }, "[handler] Gmail not configured — skipping auto-verify");
         state.stage = "purchase_select_plan";
         userStates.set(jid, state);
         await sendReply(
@@ -276,10 +291,11 @@ export async function handleMessage(
         );
       } else {
         await sendReply(
-          `❌ Could not verify your payment.\n\nPlease double-check:\n• Transaction ID: *${state.txid}*\n• Last 4 digits of Raast ID\n\nType *menu* to start over or try again with your TxID.`
+          `❌ Could not verify your payment.\n\nPlease double-check:\n• Transaction ID: *${state.txid}*\n• Amount paid\n• Last 4 digits of your account number\n\nType *menu* to start over or try again.`
         );
         state.stage = "purchase_awaiting_txid";
         state.txid = undefined;
+        state.amount = undefined;
         userStates.set(jid, state);
       }
       return;
@@ -289,7 +305,7 @@ export async function handleMessage(
     state.stage = "purchase_select_plan";
     userStates.set(jid, state);
     await sendReply(
-      `✅ *Payment Verified!*${result.senderName ? `\n👤 Received from: ${result.senderName}` : ""}${result.amount ? `\n💰 Amount: Rs. ${result.amount}` : ""}\n\n${PLAN_MENU}`
+      `✅ *Payment Verified!*${result.amount ? `\n💰 Amount: Rs. ${result.amount}` : ""}\n\n${PLAN_MENU}`
     );
     return;
   }

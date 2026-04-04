@@ -163,8 +163,11 @@ export async function createPayment(jid: string, txid: string): Promise<void> {
   );
 }
 
-export async function updatePaymentRaast(txid: string, raastLast4: string): Promise<void> {
-  await pool.query("UPDATE payments SET raast_last4 = $2 WHERE txid = $1", [txid, raastLast4]);
+export async function updatePaymentDetails(txid: string, acctLast4: string, amount: string): Promise<void> {
+  await pool.query(
+    "UPDATE payments SET raast_last4 = $2, amount = $3 WHERE txid = $1",
+    [txid, acctLast4, amount]
+  );
 }
 
 export async function verifyPayment(
