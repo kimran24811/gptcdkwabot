@@ -5,6 +5,7 @@ import { logger } from "./lib/logger.js";
 export interface VerifyResult {
   verified: boolean;
   amount?: string;
+  messageId?: string;
 }
 
 export async function verifyPaymentByEmail(
@@ -32,14 +33,14 @@ export async function verifyPaymentByEmail(
 
     const lock = await client.getMailboxLock("INBOX");
     try {
+      // Only check emails received in the last 3 hours — prevents reuse of old emails
       const since = new Date();
-      since.setDate(since.getDate() - 3);
+      since.setHours(since.getHours() - 3);
 
-      // Search for emails containing both the amount and the account title
       const uids = await client.search({ since, body: amount });
 
       if (!uids || uids.length === 0) {
-        logger.warn({ amount, acctTitle }, "[gmail] No emails found matching amount");
+        logger.warn({ amount, acctTitle }, "[gmail] No recent emails found matching amount");
         return { verified: false };
       }
 
@@ -70,10 +71,10 @@ export async function verifyPaymentByEmail(
           bodyText.match(/PKR\s*([\d,]+(?:\.\d+)?)/i);
         const emailAmount = amountMatch?.[1]?.replace(/,/g, "") ?? "";
 
-        // Check if account title appears in the email (case-insensitive)
+        // Check account title (case-insensitive)
         const titleMatches = titleLower.length > 0 && bodyLower.includes(titleLower);
 
-        // Check if amount matches
+        // Check amount matches
         const amountMatches = !amount || !emailAmount || emailAmount === amount;
 
         logger.info(
@@ -82,7 +83,8 @@ export async function verifyPaymentByEmail(
         );
 
         if (titleMatches && amountMatches) {
-          return { verified: true, amount: emailAmount || amount };
+          const messageId = (parsed.messageId as string | undefined) ?? String(uid);
+          return { verified: true, amount: emailAmount || amount, messageId };
         }
       }
 

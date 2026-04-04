@@ -8,6 +8,7 @@ import {
   updatePaymentDetails,
   verifyPayment,
   updateCustomerBalance,
+  claimEmailMessageId,
 } from "./db.js";
 import { logger } from "./lib/logger.js";
 import { randomUUID } from "crypto";
@@ -35,6 +36,8 @@ const PLAN_DEFAULT_PRICES: Record<PlanCode, string> = {
   "12mo_plus": "7500",
   "12mo_go": "1400",
 };
+
+const NUM_EMOJI = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"];
 
 interface UserState {
   stage: Stage;
@@ -110,6 +113,10 @@ function fmt(n: number): string {
   return n.toLocaleString("en-PK");
 }
 
+function numEmoji(i: number): string {
+  return NUM_EMOJI[i] ?? `${i + 1}.`;
+}
+
 async function getPlanMenuMsg(): Promise<string> {
   const prices = await Promise.all(
     PLAN_CODES.map((c) => getSetting(`price_${c}`).then((v) => v ?? PLAN_DEFAULT_PRICES[c]))
@@ -121,9 +128,9 @@ async function getPlanMenuMsg(): Promise<string> {
 3️⃣ 12 Month Go — Rs. ${parseInt(prices[2]).toLocaleString("en-PK")}/key
 
 📦 *Bulk Discounts (all plans):*
-• 10–19 keys → 5% off
-• 20–29 keys → 8% off
-• 30–50 keys → 15% off
+🔹 10–19 keys → 5% off
+🔹 20–29 keys → 8% off
+🔹 30–50 keys → 15% off
 
 Reply with *1*, *2*, or *3*`;
 }
@@ -152,10 +159,10 @@ async function getOrderMsg(plan: PlanCode, qty: number): Promise<{ msg: string; 
   if (discountPct > 0) {
     priceLines =
       `Rs. ${fmt(basePrice)} × ${qty} = Rs. ${fmt(basePrice * qty)}\n` +
-      `• Discount: ${discountPct}% = -Rs. ${fmt(discountAmt)}\n` +
-      `• *Total: Rs. ${fmt(total)}*`;
+      `🏷️ Discount: ${discountPct}% = -Rs. ${fmt(discountAmt)}\n` +
+      `💵 *Total: Rs. ${fmt(total)}*`;
   } else {
-    priceLines = `Rs. ${fmt(basePrice)} × ${qty} = *Rs. ${fmt(total)}*`;
+    priceLines = `💵 Rs. ${fmt(basePrice)} × ${qty} = *Rs. ${fmt(total)}*`;
   }
 
   const msg =
@@ -165,7 +172,7 @@ async function getOrderMsg(plan: PlanCode, qty: number): Promise<{ msg: string; 
     `📲 Please send *Rs. ${fmt(total)}* to:\n` +
     `🏦 Bank: ${bank}\n` +
     `📱 Account: *${account}*\n\n` +
-    `After payment, reply with the *amount* you paid (numbers only).`;
+    `💬 After payment, reply with the *amount* you paid (numbers only).`;
 
   return { msg, total };
 }
@@ -182,13 +189,13 @@ Reply with *1* or *2*`;
 function keyVerifiedMsg(plan?: string): string {
   return `✅ Key verified!${plan ? ` _(${plan})_` : ""}
 
-Now I need your ChatGPT *session token* to activate your account.
+🔐 Now I need your ChatGPT *session token* to activate your account.
 
 📋 How to get it:
-1. Open a browser and go to:
+1️⃣ Open a browser and go to:
    chat.openai.com/api/auth/session
-2. You'll see a JSON page starting with {"user":...
-3. Select *ALL* the text and send it here
+2️⃣ You'll see a JSON page starting with {"user":...
+3️⃣ Select *ALL* the text and send it here
 
 ⚠️ This is a long JSON string, NOT your CDK key.`;
 }
@@ -210,8 +217,8 @@ export async function handleMessage(
   const trimmed = text.trim();
   const lc = trimmed.toLowerCase();
 
-  // Global reset triggers
-  if (["menu", "start", "hi", "hello", "/start"].includes(lc)) {
+  // Global reset triggers — including * for menu
+  if (["*", "menu", "start", "hi", "hello", "/start"].includes(lc)) {
     state = { stage: "idle", lastActivity: now };
     userStates.set(jid, state);
     await sendReply(MAIN_MENU);
@@ -240,7 +247,7 @@ export async function handleMessage(
   // ── ACTIVATE: awaiting CDK key ────────────────────────────────────────────
   if (state.stage === "activate_awaiting_key") {
     if (!isCdkKeyFormat(trimmed)) {
-      await sendReply("❌ That doesn't look like a valid CDK key. Please send your key (letters and numbers only).");
+      await sendReply("❌ That doesn't look like a valid CDK key. Please send your key (letters and numbers only).\n\nType * for the main menu.");
       return;
     }
     const result = await checkKey(trimmed);
@@ -250,9 +257,9 @@ export async function handleMessage(
       userStates.set(jid, state);
       await sendReply(keyVerifiedMsg(result.subscription ?? result.product));
     } else if (result.status === "used") {
-      await sendReply("❌ This key has already been activated. Type *menu* to start over.");
+      await sendReply("❌ This key has already been activated.\n\nType * for the main menu.");
     } else if (result.status === "expired") {
-      await sendReply("❌ This key has expired. Type *menu* to start over.");
+      await sendReply("❌ This key has expired.\n\nType * for the main menu.");
     } else if (result.status === "invalid") {
       await sendReply("❌ Invalid key. Please check and try again.");
     } else {
@@ -283,13 +290,12 @@ export async function handleMessage(
     if (activation.success) {
       userStates.delete(jid);
       await sendReply(
-        `🎉 *Activation Successful!*\n📧 Account: ${activation.email ?? "N/A"}\n📦 Plan: ${activation.subscription ?? activation.product ?? "N/A"}\n\nEnjoy your subscription! 🚀`
+        `🎉 *Activation Successful!*\n📧 Account: ${activation.email ?? "N/A"}\n📦 Plan: ${activation.subscription ?? activation.product ?? "N/A"}\n\nEnjoy your subscription! 🚀\n\nType * for the main menu.`
       );
-      await sendReply(MAIN_MENU);
     } else {
       userStates.set(jid, state);
       await sendReply(
-        `❌ Activation failed: ${activation.errorMessage ?? "Unknown error"}\n\nPlease make sure you copied the complete JSON from chat.openai.com/api/auth/session and try again, or send a new CDK key.`
+        `❌ Activation failed: ${activation.errorMessage ?? "Unknown error"}\n\nMake sure you copied the complete JSON from chat.openai.com/api/auth/session and try again, or send a new CDK key.`
       );
     }
     return;
@@ -304,13 +310,13 @@ export async function handleMessage(
     };
     const plan = planByChoice[trimmed];
     if (!plan) {
-      await sendReply(`Please reply with *1*, *2*, or *3*:\n\n${await getPlanMenuMsg()}`);
+      await sendReply(`⚠️ Please reply with *1*, *2*, or *3*:\n\n${await getPlanMenuMsg()}`);
       return;
     }
     state.selectedPlan = plan;
     state.stage = "purchase_awaiting_qty";
     userStates.set(jid, state);
-    await sendReply(`✅ *${PLAN_LABELS[plan]}* selected.\n\nHow many keys do you need? _(1–50)_`);
+    await sendReply(`✅ *${PLAN_LABELS[plan]}* selected! 🎯\n\n🔢 How many keys do you need? _(1–50)_`);
     return;
   }
 
@@ -342,14 +348,14 @@ export async function handleMessage(
     }
     if (paid !== state.expectedTotal) {
       await sendReply(
-        `⚠️ The amount doesn't match.\n\nYour order total is *Rs. ${fmt(state.expectedTotal!)}*.\n\nPlease make sure you paid exactly Rs. ${fmt(state.expectedTotal!)} and then reply with that amount.`
+        `⚠️ Amount doesn't match your order.\n\n💵 Your total is *Rs. ${fmt(state.expectedTotal!)}*.\n\nPlease send exactly Rs. ${fmt(state.expectedTotal!)} and reply with that amount.`
       );
       return;
     }
     state.stage = "purchase_awaiting_title";
     userStates.set(jid, state);
     await sendReply(
-      `✅ Amount: Rs. *${fmt(paid)}*\n\nNow please send your *NayaPay account title* (the name on your account).\n\nExample: *Muhammad Ali*`
+      `✅ Amount: Rs. *${fmt(paid)}*\n\n👤 Now please send your *NayaPay account title* (the name on your account).\n\nExample: *Muhammad Ali*`
     );
     return;
   }
@@ -357,7 +363,7 @@ export async function handleMessage(
   // ── PURCHASE: awaiting account title ─────────────────────────────────────
   if (state.stage === "purchase_awaiting_title") {
     if (trimmed.length < 2) {
-      await sendReply("⚠️ Please enter your account title (the name on your NayaPay account).");
+      await sendReply("⚠️ Please enter your NayaPay account title (the name on your account).");
       return;
     }
     await updatePaymentDetails(state.internalRef!, trimmed, String(state.expectedTotal ?? "")).catch(() => {});
@@ -369,14 +375,12 @@ export async function handleMessage(
       const gmailConfigured = !!(process.env["GMAIL_USER"] && process.env["GMAIL_APP_PASSWORD"]);
       if (!gmailConfigured) {
         logger.warn({ jid }, "[handler] Gmail not configured — skipping auto-verify");
-        state.stage = "purchase_awaiting_qty";
+        state.stage = "purchase_awaiting_title";
         userStates.set(jid, state);
-        await sendReply(
-          `⚠️ Automatic verification is not set up yet. Your details have been recorded.\n\nTo retry, send your quantity again for *${PLAN_LABELS[state.selectedPlan!]}*:`
-        );
+        await sendReply("⚠️ Automatic verification is not available right now. Please contact support.\n\nType * for the main menu.");
       } else {
         await sendReply(
-          `❌ Could not verify your payment.\n\nPlease double-check:\n• You paid *Rs. ${fmt(state.expectedTotal!)}*\n• Your NayaPay account title is correct\n\nType *menu* to start over or resend your account title.`
+          `❌ Could not verify your payment.\n\nPlease double-check:\n• 💵 Amount paid: *Rs. ${fmt(state.expectedTotal!)}*\n• 👤 Your exact NayaPay account title\n\nResend your account title to try again, or type * for the main menu.`
         );
         state.stage = "purchase_awaiting_title";
         userStates.set(jid, state);
@@ -384,18 +388,32 @@ export async function handleMessage(
       return;
     }
 
-    // Payment verified — deliver keys
-    logger.info({ jid, plan: state.selectedPlan, qty: state.expectedQty, total: state.expectedTotal }, "[handler] Payment verified");
+    // ── Fraud check: claim this email — prevents reuse ────────────────────
+    if (result.messageId) {
+      const claimed = await claimEmailMessageId(state.internalRef!, result.messageId);
+      if (!claimed) {
+        logger.warn({ jid, messageId: result.messageId }, "[handler] Duplicate email claim rejected");
+        await sendReply(
+          `❌ This payment has already been used for a previous order.\n\nIf you believe this is an error, please contact support.\n\nType * for the main menu.`
+        );
+        state = { stage: "idle", lastActivity: now };
+        userStates.set(jid, state);
+        return;
+      }
+    }
+
+    // Payment verified and claimed — deliver keys
+    logger.info({ jid, plan: state.selectedPlan, qty: state.expectedQty, total: state.expectedTotal }, "[handler] Payment verified and claimed");
 
     const keys = await getAvailableKeys(state.selectedPlan!, state.expectedQty!);
     if (keys.length === 0) {
-      await sendReply("❌ Sorry, no keys are currently available for this plan. Please contact support.");
+      await sendReply("😔 Sorry, no keys are currently available for this plan. Please contact support.\n\nType * for the main menu.");
       state = { stage: "idle", lastActivity: now };
       userStates.set(jid, state);
       return;
     }
     if (keys.length < state.expectedQty!) {
-      await sendReply(`⚠️ Only ${keys.length} key(s) available. Sending what we have.`);
+      await sendReply(`⚠️ Only ${keys.length} key${keys.length > 1 ? "s" : ""} available for this plan. Sending what we have!`);
     }
 
     await markKeysUsed(keys.map((k) => k.id), jid);
@@ -408,11 +426,15 @@ export async function handleMessage(
     await updateCustomerBalance(jid, state.expectedTotal!, keys.length).catch(() => {});
 
     const planLabel = PLAN_LABELS[state.selectedPlan!];
-    const keyList = keys.map((k, i) => `${i + 1}. \`${k.key_value}\``).join("\n");
+    const keyList = keys.map((k, i) => `${numEmoji(i)} *${k.key_value}*`).join("\n");
 
     userStates.delete(jid);
     await sendReply(
-      `🎉 *Here are your ${planLabel} key${keys.length > 1 ? "s" : ""}:*\n\n${keyList}\n\n💰 Total paid: Rs. ${fmt(state.expectedTotal!)}\n\nThank you for your purchase! 🚀\nType *menu* if you need anything else.`
+      `🎉 *Here ${keys.length === 1 ? "is your" : "are your"} ${planLabel} key${keys.length > 1 ? "s" : ""}:* 🔑\n\n` +
+      `${keyList}\n\n` +
+      `💰 Total paid: Rs. ${fmt(state.expectedTotal!)}\n\n` +
+      `Thank you for your purchase! 🙏\n` +
+      `Type * for the main menu.`
     );
     return;
   }

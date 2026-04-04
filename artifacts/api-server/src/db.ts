@@ -48,6 +48,16 @@ export async function initDb(): Promise<void> {
     );
   `);
 
+  // Add email_message_id column for fraud prevention (idempotent)
+  await pool.query(`
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS email_message_id TEXT;
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_email_message_id
+    ON payments (email_message_id)
+    WHERE email_message_id IS NOT NULL;
+  `);
+
   // Non-price defaults (only insert if missing)
   await pool.query(`
     INSERT INTO settings (key, value) VALUES
@@ -195,6 +205,22 @@ export async function verifyPayment(
     "UPDATE payments SET verified = TRUE, verified_at = NOW(), plan = $2, quantity = $3, keys_delivered = $4 WHERE txid = $1",
     [txid, plan, quantity, keys]
   );
+}
+
+/**
+ * Atomically claims an email message ID for a payment.
+ * Returns true if claimed successfully, false if that email was already used.
+ */
+export async function claimEmailMessageId(txid: string, messageId: string): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE payments SET email_message_id = $2
+     WHERE txid = $1
+       AND NOT EXISTS (
+         SELECT 1 FROM payments p2 WHERE p2.email_message_id = $2
+       )`,
+    [txid, messageId]
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 export async function updateCustomerBalance(jid: string, amount: number, keys: number): Promise<void> {
