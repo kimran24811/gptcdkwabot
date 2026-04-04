@@ -61,7 +61,18 @@ function isCdkKeyFormat(text: string): boolean {
 
 function isSessionToken(text: string): boolean {
   const t = text.trim();
-  return t.includes("accessToken") || t.includes('"user"') || t.includes("'user'");
+  // Must look like JSON (starts with '{') and contain required session fields
+  if (!t.startsWith("{")) return false;
+  try {
+    const parsed = JSON.parse(t) as Record<string, unknown>;
+    return (
+      typeof parsed["accessToken"] === "string" ||
+      (typeof parsed["user"] === "object" && parsed["user"] !== null)
+    );
+  } catch {
+    // Not valid JSON — not a session token
+    return false;
+  }
 }
 
 const WELCOME_MSG = `👋 Welcome to ChatGPT CDK Activation Bot!

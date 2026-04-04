@@ -26,9 +26,10 @@ export function getWhatsAppState(): WhatsAppState {
   return { ...state };
 }
 
-// Suppress noisy Baileys trace/debug logs by using a pino child at 'info' level.
-// The child logger is a real pino.Logger so it satisfies Baileys' expected type.
-const baileysLogger = logger.child({ module: "baileys" });
+// Suppress noisy Baileys trace/debug logs by forcing the child to 'info' level,
+// regardless of the global LOG_LEVEL. This prevents debug/trace noise even
+// when the root logger is set to a lower level in development.
+const baileysLogger = logger.child({ module: "baileys" }, { level: "info" });
 
 async function connect(): Promise<void> {
   const { state: authState, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
