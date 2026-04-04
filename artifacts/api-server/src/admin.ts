@@ -8,6 +8,7 @@ import {
   deleteKey,
   getKeyStats,
   listPayments,
+  listCustomerBalances,
 } from "./db.js";
 import { PLAN_LABELS, PLAN_CODES } from "./handler.js";
 
@@ -86,6 +87,13 @@ router.get("/admin/payments", (req, res) => {
   if (!isAuthorized(req)) { res.status(401).json({ error: "Unauthorized" }); return; }
   listPayments()
     .then((payments) => res.json(payments))
+    .catch((e) => res.status(500).json({ error: String(e) }));
+});
+
+router.get("/admin/customers", (req, res) => {
+  if (!isAuthorized(req)) { res.status(401).json({ error: "Unauthorized" }); return; }
+  listCustomerBalances()
+    .then((rows) => res.json(rows))
     .catch((e) => res.status(500).json({ error: String(e) }));
 });
 
@@ -173,6 +181,7 @@ router.get("/admin", (req: Request, res: Response) => {
   <button class="tab" onclick="showTab('settings')">⚙️ Settings</button>
   <button class="tab" onclick="showTab('keys')">🔑 Key Pool</button>
   <button class="tab" onclick="showTab('payments')">💳 Payments</button>
+  <button class="tab" onclick="showTab('customers')">👥 Customers</button>
 </div>
 
 <!-- STATUS TAB -->
@@ -237,6 +246,15 @@ router.get("/admin", (req: Request, res: Response) => {
   <div id="payments-table"></div>
 </div>
 
+<!-- CUSTOMERS TAB -->
+<div id="tab-customers" class="panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <span style="font-size:.9rem;color:#555">Customer spending records</span>
+    <button class="btn btn-primary" onclick="loadCustomers()" style="padding:6px 14px;font-size:.82rem">↻ Refresh</button>
+  </div>
+  <div id="customers-table"></div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -244,12 +262,13 @@ const TOKEN = ${JSON.stringify(token)};
 const API = (path) => path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(TOKEN);
 
 function showTab(name) {
-  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', ['status','settings','keys','payments'][i] === name));
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', ['status','settings','keys','payments','customers'][i] === name));
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   if (name === 'settings') loadSettings();
   if (name === 'keys') { loadKeyStats(); loadKeys(); }
   if (name === 'payments') loadPayments();
+  if (name === 'customers') loadCustomers();
 }
 
 function toast(msg, ok = true) {
@@ -337,15 +356,30 @@ async function loadPayments() {
   const planLabels = ${JSON.stringify(PLAN_LABELS)};
   const el = document.getElementById('payments-table');
   if (!payments.length) { el.innerHTML = '<p style="color:#888;font-size:.85rem">No payments yet.</p>'; return; }
-  el.innerHTML = '<div style="overflow-x:auto"><table><thead><tr><th>Date</th><th>JID</th><th>TxID</th><th>Raast Last4</th><th>Status</th><th>Plan</th><th>Qty</th></tr></thead><tbody>' +
+  el.innerHTML = '<div style="overflow-x:auto"><table><thead><tr><th>Date</th><th>Customer</th><th>Amount</th><th>Acc. Title</th><th>Status</th><th>Plan</th><th>Qty</th></tr></thead><tbody>' +
     payments.map(p => \`<tr>
       <td style="font-size:.8rem;white-space:nowrap">\${new Date(p.created_at).toLocaleString()}</td>
       <td style="font-size:.8rem">\${p.jid.replace('@s.whatsapp.net','').replace('@lid','')}</td>
-      <td style="font-family:monospace;font-size:.78rem">\${p.txid}</td>
-      <td style="text-align:center">\${p.raast_last4 ?? '—'}</td>
+      <td style="font-size:.85rem;font-weight:600">\${p.amount ? 'Rs. ' + parseInt(p.amount).toLocaleString('en-PK') : '—'}</td>
+      <td style="font-size:.82rem">\${p.raast_last4 ?? '—'}</td>
       <td>\${p.verified ? '<span class="tag tag-green">Verified</span>' : '<span class="tag tag-red">Pending</span>'}</td>
       <td style="font-size:.82rem">\${p.plan ? (planLabels[p.plan] ?? p.plan) : '—'}</td>
       <td style="text-align:center">\${p.quantity ?? '—'}</td>
+    </tr>\`).join('') + '</tbody></table></div>';
+}
+
+async function loadCustomers() {
+  const r = await fetch(API('/api/admin/customers'));
+  const customers = await r.json();
+  const el = document.getElementById('customers-table');
+  if (!customers.length) { el.innerHTML = '<p style="color:#888;font-size:.85rem">No customer records yet.</p>'; return; }
+  el.innerHTML = '<div style="overflow-x:auto"><table><thead><tr><th>Customer</th><th>Total Spent</th><th>Keys Bought</th><th>First Purchase</th><th>Last Purchase</th></tr></thead><tbody>' +
+    customers.map(c => \`<tr>
+      <td style="font-family:monospace;font-size:.82rem">\${c.jid.replace('@s.whatsapp.net','').replace('@lid','')}</td>
+      <td style="font-weight:700;color:#166534">Rs. \${parseInt(c.total_spent).toLocaleString('en-PK')}</td>
+      <td style="text-align:center;font-weight:600">\${c.total_keys}</td>
+      <td style="font-size:.8rem;color:#888">\${c.first_purchase_at ? new Date(c.first_purchase_at).toLocaleDateString() : '—'}</td>
+      <td style="font-size:.8rem;color:#888">\${c.last_purchase_at ? new Date(c.last_purchase_at).toLocaleDateString() : '—'}</td>
     </tr>\`).join('') + '</tbody></table></div>';
 }
 </script>

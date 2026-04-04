@@ -38,17 +38,32 @@ export async function initDb(): Promise<void> {
       keys_delivered TEXT[],
       created_at TIMESTAMP DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS customer_balances (
+      jid TEXT PRIMARY KEY,
+      total_spent NUMERIC(12,2) DEFAULT 0,
+      total_keys INTEGER DEFAULT 0,
+      last_purchase_at TIMESTAMP,
+      first_purchase_at TIMESTAMP DEFAULT NOW()
+    );
   `);
 
+  // Non-price defaults (only insert if missing)
   await pool.query(`
     INSERT INTO settings (key, value) VALUES
       ('account_number', '03022000761'),
       ('bank_name', 'Nayapay'),
-      ('account_title', 'Khalid Imran'),
-      ('price_1mo_plus', '680'),
-      ('price_12mo_plus', '5000'),
-      ('price_12mo_go', '4500')
+      ('account_title', 'Khalid Imran')
     ON CONFLICT (key) DO NOTHING;
+  `);
+
+  // Always apply latest price defaults
+  await pool.query(`
+    INSERT INTO settings (key, value) VALUES
+      ('price_1mo_plus', '620'),
+      ('price_12mo_plus', '7500'),
+      ('price_12mo_go', '1400')
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
   `);
 
   logger.info("[db] Database initialized");
@@ -180,6 +195,33 @@ export async function verifyPayment(
     "UPDATE payments SET verified = TRUE, verified_at = NOW(), plan = $2, quantity = $3, keys_delivered = $4 WHERE txid = $1",
     [txid, plan, quantity, keys]
   );
+}
+
+export async function updateCustomerBalance(jid: string, amount: number, keys: number): Promise<void> {
+  await pool.query(
+    `INSERT INTO customer_balances (jid, total_spent, total_keys, last_purchase_at, first_purchase_at)
+     VALUES ($1, $2, $3, NOW(), NOW())
+     ON CONFLICT (jid) DO UPDATE
+     SET total_spent = customer_balances.total_spent + $2,
+         total_keys  = customer_balances.total_keys + $3,
+         last_purchase_at = NOW()`,
+    [jid, amount, keys]
+  );
+}
+
+export async function listCustomerBalances(): Promise<
+  Array<{
+    jid: string;
+    total_spent: string;
+    total_keys: number;
+    last_purchase_at: string | null;
+    first_purchase_at: string | null;
+  }>
+> {
+  const { rows } = await pool.query(
+    "SELECT jid, total_spent, total_keys, last_purchase_at, first_purchase_at FROM customer_balances ORDER BY total_spent DESC LIMIT 500"
+  );
+  return rows;
 }
 
 export async function listPayments(): Promise<

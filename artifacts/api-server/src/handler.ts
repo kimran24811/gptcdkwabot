@@ -7,6 +7,7 @@ import {
   createPayment,
   updatePaymentDetails,
   verifyPayment,
+  updateCustomerBalance,
 } from "./db.js";
 import { logger } from "./lib/logger.js";
 import { randomUUID } from "crypto";
@@ -15,10 +16,10 @@ type Stage =
   | "idle"
   | "activate_awaiting_key"
   | "activate_awaiting_session"
-  | "purchase_awaiting_amount"
-  | "purchase_awaiting_title"
   | "purchase_select_plan"
-  | "purchase_awaiting_qty";
+  | "purchase_awaiting_qty"
+  | "purchase_awaiting_amount"
+  | "purchase_awaiting_title";
 
 export const PLAN_CODES = ["1mo_plus", "12mo_plus", "12mo_go"] as const;
 export type PlanCode = (typeof PLAN_CODES)[number];
@@ -29,12 +30,19 @@ export const PLAN_LABELS: Record<PlanCode, string> = {
   "12mo_go": "12 Month Go Plan",
 };
 
+const PLAN_DEFAULT_PRICES: Record<PlanCode, string> = {
+  "1mo_plus": "620",
+  "12mo_plus": "7500",
+  "12mo_go": "1400",
+};
+
 interface UserState {
   stage: Stage;
   cdkKey?: string;
   internalRef?: string;
-  amount?: string;
   selectedPlan?: PlanCode;
+  expectedQty?: number;
+  expectedTotal?: number;
   lastActivity: number;
 }
 
@@ -91,6 +99,77 @@ function isSessionToken(text: string): boolean {
   } catch { return false; }
 }
 
+function discountRate(qty: number): number {
+  if (qty >= 30) return 0.15;
+  if (qty >= 20) return 0.08;
+  if (qty >= 10) return 0.05;
+  return 0;
+}
+
+function fmt(n: number): string {
+  return n.toLocaleString("en-PK");
+}
+
+async function getPlanMenuMsg(): Promise<string> {
+  const prices = await Promise.all(
+    PLAN_CODES.map((c) => getSetting(`price_${c}`).then((v) => v ?? PLAN_DEFAULT_PRICES[c]))
+  );
+  return `🛒 *Select a Plan:*
+
+1️⃣ 1 Month Plus — Rs. ${parseInt(prices[0]).toLocaleString("en-PK")}/key
+2️⃣ 12 Month Plus — Rs. ${parseInt(prices[1]).toLocaleString("en-PK")}/key
+3️⃣ 12 Month Go — Rs. ${parseInt(prices[2]).toLocaleString("en-PK")}/key
+
+📦 *Bulk Discounts (all plans):*
+• 10–19 keys → 5% off
+• 20–29 keys → 8% off
+• 30–50 keys → 15% off
+
+Reply with *1*, *2*, or *3*`;
+}
+
+async function calcOrder(plan: PlanCode, qty: number): Promise<{
+  basePrice: number;
+  discountPct: number;
+  discountAmt: number;
+  total: number;
+}> {
+  const priceStr = (await getSetting(`price_${plan}`)) ?? PLAN_DEFAULT_PRICES[plan];
+  const basePrice = parseInt(priceStr, 10);
+  const rate = discountRate(qty);
+  const discountAmt = Math.round(basePrice * qty * rate);
+  const total = basePrice * qty - discountAmt;
+  return { basePrice, discountPct: Math.round(rate * 100), discountAmt, total };
+}
+
+async function getOrderMsg(plan: PlanCode, qty: number): Promise<{ msg: string; total: number }> {
+  const account = (await getSetting("account_number")) ?? "03022000761";
+  const bank = (await getSetting("bank_name")) ?? "Nayapay";
+  const { basePrice, discountPct, discountAmt, total } = await calcOrder(plan, qty);
+  const label = PLAN_LABELS[plan];
+
+  let priceLines: string;
+  if (discountPct > 0) {
+    priceLines =
+      `Rs. ${fmt(basePrice)} × ${qty} = Rs. ${fmt(basePrice * qty)}\n` +
+      `• Discount: ${discountPct}% = -Rs. ${fmt(discountAmt)}\n` +
+      `• *Total: Rs. ${fmt(total)}*`;
+  } else {
+    priceLines = `Rs. ${fmt(basePrice)} × ${qty} = *Rs. ${fmt(total)}*`;
+  }
+
+  const msg =
+    `🧾 *Order Summary*\n` +
+    `📦 ${label} × ${qty} key${qty > 1 ? "s" : ""}\n` +
+    `💰 ${priceLines}\n\n` +
+    `📲 Please send *Rs. ${fmt(total)}* to:\n` +
+    `🏦 Bank: ${bank}\n` +
+    `📱 Account: *${account}*\n\n` +
+    `After payment, reply with the *amount* you paid (numbers only).`;
+
+  return { msg, total };
+}
+
 const MAIN_MENU = `👋 *Welcome to ChatGPT Bot!*
 
 What would you like to do?
@@ -99,27 +178,6 @@ What would you like to do?
 2️⃣ Purchase a new key
 
 Reply with *1* or *2*`;
-
-const PLAN_MENU = `🛒 *Select a Plan:*
-
-1️⃣ 1 Month Plus Plan
-2️⃣ 12 Month Plus Plan
-3️⃣ 12 Month Go Plan
-
-Reply with *1*, *2*, or *3*`;
-
-async function getPaymentInfo(): Promise<string> {
-  const account = (await getSetting("account_number")) ?? "03022000761";
-  const bank = (await getSetting("bank_name")) ?? "Nayapay";
-  return `💳 *Payment Details*
-
-🏦 Bank: ${bank}
-📱 Account Number: *${account}*
-
-Please send your payment and then reply with the *amount* you paid.
-
-Example: *500*`;
-}
 
 function keyVerifiedMsg(plan?: string): string {
   return `✅ Key verified!${plan ? ` _(${plan})_` : ""}
@@ -169,11 +227,9 @@ export async function handleMessage(
       return;
     }
     if (trimmed === "2") {
-      state.stage = "purchase_awaiting_amount";
-      state.internalRef = randomUUID();
+      state.stage = "purchase_select_plan";
       userStates.set(jid, state);
-      await createPayment(jid, state.internalRef).catch(() => {});
-      await sendReply(await getPaymentInfo());
+      await sendReply(await getPlanMenuMsg());
       return;
     }
     await sendReply(MAIN_MENU);
@@ -239,18 +295,61 @@ export async function handleMessage(
     return;
   }
 
-  // ── PURCHASE: awaiting amount ─────────────────────────────────────────────
-  if (state.stage === "purchase_awaiting_amount") {
-    const amountClean = trimmed.replace(/[^0-9.]/g, "");
-    if (!amountClean || isNaN(Number(amountClean)) || Number(amountClean) <= 0) {
-      await sendReply("⚠️ Please enter the amount you paid (numbers only).\n\nExample: *500*");
+  // ── PURCHASE: select plan ─────────────────────────────────────────────────
+  if (state.stage === "purchase_select_plan") {
+    const planByChoice: Record<string, PlanCode> = {
+      "1": "1mo_plus",
+      "2": "12mo_plus",
+      "3": "12mo_go",
+    };
+    const plan = planByChoice[trimmed];
+    if (!plan) {
+      await sendReply(`Please reply with *1*, *2*, or *3*:\n\n${await getPlanMenuMsg()}`);
       return;
     }
-    state.amount = amountClean;
+    state.selectedPlan = plan;
+    state.stage = "purchase_awaiting_qty";
+    userStates.set(jid, state);
+    await sendReply(`✅ *${PLAN_LABELS[plan]}* selected.\n\nHow many keys do you need? _(1–50)_`);
+    return;
+  }
+
+  // ── PURCHASE: awaiting quantity ───────────────────────────────────────────
+  if (state.stage === "purchase_awaiting_qty") {
+    const qty = parseInt(trimmed, 10);
+    if (isNaN(qty) || qty < 1 || qty > 50) {
+      await sendReply("⚠️ Please enter a number between *1* and *50*.");
+      return;
+    }
+    const { msg, total } = await getOrderMsg(state.selectedPlan!, qty);
+    state.expectedQty = qty;
+    state.expectedTotal = total;
+    state.internalRef = randomUUID();
+    state.stage = "purchase_awaiting_amount";
+    userStates.set(jid, state);
+    await createPayment(jid, state.internalRef).catch(() => {});
+    await sendReply(msg);
+    return;
+  }
+
+  // ── PURCHASE: awaiting amount ─────────────────────────────────────────────
+  if (state.stage === "purchase_awaiting_amount") {
+    const amountClean = trimmed.replace(/[^0-9]/g, "");
+    const paid = parseInt(amountClean, 10);
+    if (!amountClean || isNaN(paid) || paid <= 0) {
+      await sendReply("⚠️ Please enter the amount you paid (numbers only).\n\nExample: *620*");
+      return;
+    }
+    if (paid !== state.expectedTotal) {
+      await sendReply(
+        `⚠️ The amount doesn't match.\n\nYour order total is *Rs. ${fmt(state.expectedTotal!)}*.\n\nPlease make sure you paid exactly Rs. ${fmt(state.expectedTotal!)} and then reply with that amount.`
+      );
+      return;
+    }
     state.stage = "purchase_awaiting_title";
     userStates.set(jid, state);
     await sendReply(
-      `✅ Amount: Rs. *${amountClean}*\n\nNow please send your *NayaPay account title* (the name on your account).\n\nExample: *Muhammad Ali*`
+      `✅ Amount: Rs. *${fmt(paid)}*\n\nNow please send your *NayaPay account title* (the name on your account).\n\nExample: *Muhammad Ali*`
     );
     return;
   }
@@ -261,86 +360,60 @@ export async function handleMessage(
       await sendReply("⚠️ Please enter your account title (the name on your NayaPay account).");
       return;
     }
-    await updatePaymentDetails(state.internalRef!, trimmed, state.amount ?? "").catch(() => {});
+    await updatePaymentDetails(state.internalRef!, trimmed, String(state.expectedTotal ?? "")).catch(() => {});
     await sendReply("⏳ Verifying your payment, please wait...");
 
-    const result = await verifyPaymentByEmail(trimmed, state.amount ?? "");
+    const result = await verifyPaymentByEmail(trimmed, String(state.expectedTotal ?? ""));
 
     if (!result.verified) {
       const gmailConfigured = !!(process.env["GMAIL_USER"] && process.env["GMAIL_APP_PASSWORD"]);
       if (!gmailConfigured) {
         logger.warn({ jid }, "[handler] Gmail not configured — skipping auto-verify");
-        state.stage = "purchase_select_plan";
+        state.stage = "purchase_awaiting_qty";
         userStates.set(jid, state);
         await sendReply(
-          `⚠️ Automatic verification is being set up. Your payment details have been recorded.\n\nMeanwhile, please select your plan:\n\n${PLAN_MENU}`
+          `⚠️ Automatic verification is not set up yet. Your details have been recorded.\n\nTo retry, send your quantity again for *${PLAN_LABELS[state.selectedPlan!]}*:`
         );
       } else {
         await sendReply(
-          `❌ Could not verify your payment.\n\nPlease double-check:\n• Amount paid\n• Your NayaPay account title\n\nType *menu* to start over or try again.`
+          `❌ Could not verify your payment.\n\nPlease double-check:\n• You paid *Rs. ${fmt(state.expectedTotal!)}*\n• Your NayaPay account title is correct\n\nType *menu* to start over or resend your account title.`
         );
-        state.stage = "purchase_awaiting_amount";
-        state.amount = undefined;
+        state.stage = "purchase_awaiting_title";
         userStates.set(jid, state);
       }
       return;
     }
 
-    logger.info({ jid, ...result }, "[handler] Payment verified via email");
-    state.stage = "purchase_select_plan";
-    userStates.set(jid, state);
-    await sendReply(
-      `✅ *Payment Verified!*${result.amount ? `\n💰 Amount: Rs. ${result.amount}` : ""}\n\n${PLAN_MENU}`
-    );
-    return;
-  }
+    // Payment verified — deliver keys
+    logger.info({ jid, plan: state.selectedPlan, qty: state.expectedQty, total: state.expectedTotal }, "[handler] Payment verified");
 
-  // ── PURCHASE: select plan ─────────────────────────────────────────────────
-  if (state.stage === "purchase_select_plan") {
-    const planByChoice: Record<string, PlanCode> = {
-      "1": "1mo_plus",
-      "2": "12mo_plus",
-      "3": "12mo_go",
-    };
-    const plan = planByChoice[trimmed];
-    if (!plan) {
-      await sendReply(`Please reply with *1*, *2*, or *3*:\n\n${PLAN_MENU}`);
-      return;
-    }
-    state.selectedPlan = plan;
-    state.stage = "purchase_awaiting_qty";
-    userStates.set(jid, state);
-    await sendReply(`✅ Selected: *${PLAN_LABELS[plan]}*\n\nHow many keys do you need? _(Enter a number, max 10)_`);
-    return;
-  }
-
-  // ── PURCHASE: awaiting quantity ───────────────────────────────────────────
-  if (state.stage === "purchase_awaiting_qty") {
-    const qty = parseInt(trimmed, 10);
-    if (isNaN(qty) || qty < 1 || qty > 10) {
-      await sendReply("⚠️ Please enter a number between *1* and *10*.");
-      return;
-    }
-
-    const keys = await getAvailableKeys(state.selectedPlan!, qty);
+    const keys = await getAvailableKeys(state.selectedPlan!, state.expectedQty!);
     if (keys.length === 0) {
       await sendReply("❌ Sorry, no keys are currently available for this plan. Please contact support.");
       state = { stage: "idle", lastActivity: now };
       userStates.set(jid, state);
       return;
     }
-    if (keys.length < qty) {
+    if (keys.length < state.expectedQty!) {
       await sendReply(`⚠️ Only ${keys.length} key(s) available. Sending what we have.`);
     }
 
     await markKeysUsed(keys.map((k) => k.id), jid);
-    await verifyPayment(state.internalRef!, state.selectedPlan!, keys.length, keys.map((k) => k.key_value)).catch(() => {});
+    await verifyPayment(
+      state.internalRef!,
+      state.selectedPlan!,
+      keys.length,
+      keys.map((k) => k.key_value)
+    ).catch(() => {});
+    await updateCustomerBalance(jid, state.expectedTotal!, keys.length).catch(() => {});
 
     const planLabel = PLAN_LABELS[state.selectedPlan!];
-    const keyList = keys.map((k, i) => `${i + 1}. ${k.key_value}`).join("\n");
+    const keyList = keys.map((k, i) => `${i + 1}. \`${k.key_value}\``).join("\n");
 
     userStates.delete(jid);
-    await sendReply(`🎉 *Here are your ${planLabel} key(s):*\n\n${keyList}\n\nThank you for your purchase! 🚀\n\nType *menu* if you need anything else.`);
+    await sendReply(
+      `🎉 *Here are your ${planLabel} key${keys.length > 1 ? "s" : ""}:*\n\n${keyList}\n\n💰 Total paid: Rs. ${fmt(state.expectedTotal!)}\n\nThank you for your purchase! 🚀\nType *menu* if you need anything else.`
+    );
     return;
   }
 
