@@ -61,30 +61,26 @@ export async function checkKey(key: string): Promise<CheckKeyResult> {
 
 export async function activateKey(
   key: string,
-  userToken: string
+  sessionToken: string
 ): Promise<ActivateKeyResult> {
   try {
-    const url = `${getBase()}/activate`;
+    const url = `${getBase()}/key/activate`;
 
     const res = await fetch(url, {
       method: "POST",
       headers: authHeaders(),
-      body: JSON.stringify({ key, user_token: userToken, async: true }),
+      body: JSON.stringify({ key, sessionToken }),
     });
 
     const json = (await res.json()) as {
       success: boolean;
-      activation_id?: string;
       data?: {
         email?: string;
-        product?: string;
         subscription?: string;
-        status?: string;
-        error?: string;
-        message?: string;
+        product?: string;
       };
-      error?: string;
       message?: string;
+      error?: string;
     };
 
     if (!res.ok || !json.success) {
@@ -94,68 +90,14 @@ export async function activateKey(
       };
     }
 
-    const activationId = json.activation_id;
-    if (!activationId) {
-      return { success: false, errorMessage: "No activation ID returned" };
-    }
-
-    return await pollActivation(activationId);
+    return {
+      success: true,
+      email: json.data?.email,
+      product: json.data?.product,
+      subscription: json.data?.subscription,
+    };
   } catch (err) {
     logger.error({ err }, "[cdk] activateKey failed");
     return { success: false, errorMessage: "Network error during activation" };
   }
-}
-
-async function pollActivation(
-  activationId: string
-): Promise<ActivateKeyResult> {
-  const url = `${getBase()}/activation/${encodeURIComponent(activationId)}/status`;
-  const maxAttempts = 40;
-  const intervalMs = 4000;
-
-  for (let i = 0; i < maxAttempts; i++) {
-    await sleep(intervalMs);
-    try {
-      const res = await fetch(url, { headers: authHeaders() });
-      const json = (await res.json()) as {
-        success: boolean;
-        data?: {
-          status?: string;
-          email?: string;
-          product?: string;
-          subscription?: string;
-          error?: string;
-          message?: string;
-        };
-      };
-
-      const status = json.data?.status;
-
-      if (status === "success") {
-        return {
-          success: true,
-          email: json.data?.email,
-          product: json.data?.product,
-          subscription: json.data?.subscription,
-        };
-      }
-
-      if (status === "failed") {
-        return {
-          success: false,
-          errorMessage: json.data?.message ?? json.data?.error ?? "Activation failed",
-        };
-      }
-
-      // status === "processing" — keep polling
-    } catch (err) {
-      logger.warn({ err, activationId }, "[cdk] poll attempt failed");
-    }
-  }
-
-  return { success: false, errorMessage: "Activation timed out" };
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
