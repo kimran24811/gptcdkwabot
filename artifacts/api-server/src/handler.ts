@@ -16,7 +16,7 @@ type Stage =
   | "activate_awaiting_key"
   | "activate_awaiting_session"
   | "purchase_awaiting_amount"
-  | "purchase_awaiting_acct4"
+  | "purchase_awaiting_title"
   | "purchase_select_plan"
   | "purchase_awaiting_qty";
 
@@ -247,18 +247,18 @@ export async function handleMessage(
       return;
     }
     state.amount = amountClean;
-    state.stage = "purchase_awaiting_acct4";
+    state.stage = "purchase_awaiting_title";
     userStates.set(jid, state);
     await sendReply(
-      `✅ Amount: Rs. *${amountClean}*\n\nNow please send the *last 4 digits* of your *account number*.\n\nThis is shown in your NayaPay payment confirmation email.`
+      `✅ Amount: Rs. *${amountClean}*\n\nNow please send your *NayaPay account title* (the name on your account).\n\nExample: *Muhammad Ali*`
     );
     return;
   }
 
-  // ── PURCHASE: awaiting account last 4 ────────────────────────────────────
-  if (state.stage === "purchase_awaiting_acct4") {
-    if (!/^\d{4}$/.test(trimmed)) {
-      await sendReply("⚠️ Please enter exactly *4 digits* (the last 4 digits of your account number).");
+  // ── PURCHASE: awaiting account title ─────────────────────────────────────
+  if (state.stage === "purchase_awaiting_title") {
+    if (trimmed.length < 2) {
+      await sendReply("⚠️ Please enter your account title (the name on your NayaPay account).");
       return;
     }
     await updatePaymentDetails(state.internalRef!, trimmed, state.amount ?? "").catch(() => {});
@@ -277,7 +277,7 @@ export async function handleMessage(
         );
       } else {
         await sendReply(
-          `❌ Could not verify your payment.\n\nPlease double-check:\n• Amount paid\n• Last 4 digits of your account number\n\nType *menu* to start over or try again.`
+          `❌ Could not verify your payment.\n\nPlease double-check:\n• Amount paid\n• Your NayaPay account title\n\nType *menu* to start over or try again.`
         );
         state.stage = "purchase_awaiting_amount";
         state.amount = undefined;
