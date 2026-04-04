@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { startWhatsApp, stopWhatsApp } from "./whatsapp.js";
+import { initDb } from "./db.js";
 
 const rawPort = process.env["PORT"];
 
@@ -24,10 +25,13 @@ const server = app.listen(port, (err) => {
 
   logger.info({ port }, "Server listening");
 
-  // Start WhatsApp bot after server is up
-  startWhatsApp().catch((err) => {
-    logger.error({ err }, "[whatsapp] Failed to start");
-  });
+  // Init database then start WhatsApp
+  initDb()
+    .then(() => startWhatsApp())
+    .catch((err) => {
+      logger.error({ err }, "Startup failed");
+      process.exit(1);
+    });
 });
 
 function shutdown() {

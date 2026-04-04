@@ -101,6 +101,9 @@ async function buildAll() {
       "puppeteer",
       "puppeteer-core",
       "electron",
+      "imapflow",
+      "mailparser",
+      "pg",
     ],
     sourcemap: "linked",
     plugins: [
