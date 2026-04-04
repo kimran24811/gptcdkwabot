@@ -63,7 +63,8 @@ export async function initDb(): Promise<void> {
     INSERT INTO settings (key, value) VALUES
       ('account_number', '03022000761'),
       ('bank_name', 'Nayapay'),
-      ('account_title', 'Khalid Imran')
+      ('account_title', 'Khalid Imran'),
+      ('bot_name', 'ChatGPT Bot')
     ON CONFLICT (key) DO NOTHING;
   `);
 

@@ -45,7 +45,7 @@ router.get("/admin/settings", (req, res) => {
 router.post("/admin/settings", (req, res) => {
   if (!isAuthorized(req)) { res.status(401).json({ error: "Unauthorized" }); return; }
   const body = req.body as Record<string, string>;
-  const allowed = ["account_number", "bank_name", "account_title", "price_1mo_plus", "price_12mo_plus", "price_12mo_go"];
+  const allowed = ["bot_name", "account_number", "bank_name", "account_title", "price_1mo_plus", "price_12mo_plus", "price_12mo_go"];
   Promise.all(
     Object.entries(body)
       .filter(([k]) => allowed.includes(k))
@@ -197,6 +197,8 @@ router.get("/admin", (req: Request, res: Response) => {
 <div id="tab-settings" class="panel">
   <p class="notice">These are the payment details shown to customers when they choose to purchase a key.</p>
   <form id="settings-form">
+    <div class="form-row"><label>Bot Name <span style="font-size:.75rem;color:#888">(shown to customers who haven't saved the number)</span></label><input name="bot_name" /></div>
+    <hr style="margin:12px 0;border-color:#f3f4f6" />
     <div class="form-row"><label>Bank Name</label><input name="bank_name" /></div>
     <div class="form-row"><label>Account Title</label><input name="account_title" /></div>
     <div class="form-row"><label>Account Number</label><input name="account_number" /></div>

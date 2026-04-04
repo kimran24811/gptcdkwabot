@@ -10,6 +10,7 @@ import makeWASocket, {
 import QRCode from "qrcode";
 import { logger } from "./lib/logger.js";
 import { handleMessage, isDuplicate } from "./handler.js";
+import { getSetting } from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AUTH_DIR = path.resolve(__dirname, "../wa-auth");
@@ -65,6 +66,15 @@ async function connect(): Promise<void> {
       state.qrDataUrl = null;
       const id = sock.user?.id ?? "unknown";
       logger.info({ id }, "[whatsapp] Connected");
+
+      // Set profile name so it shows to anyone who messages, even unsaved contacts
+      try {
+        const botName = (await getSetting("bot_name")) ?? "ChatGPT Bot";
+        await sock.updateProfileName(botName);
+        logger.info({ botName }, "[whatsapp] Profile name updated");
+      } catch (err) {
+        logger.warn({ err }, "[whatsapp] Could not update profile name");
+      }
     }
 
     if (connection === "close") {
