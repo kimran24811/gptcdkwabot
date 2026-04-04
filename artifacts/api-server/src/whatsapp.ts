@@ -90,28 +90,39 @@ async function connect(): Promise<void> {
   });
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    if (type !== "notify") return;
+    logger.info({ type, count: messages.length }, "[whatsapp] messages.upsert received");
+
+    // Accept both 'notify' (real-time) and 'append' (catch-up after reconnect)
+    if (type !== "notify" && type !== "append") return;
 
     for (const msg of messages) {
-      if (msg.key.fromMe) continue;
-
       const jid = msg.key.remoteJid ?? "";
+      const fromMe = msg.key.fromMe ?? false;
+
+      logger.info({ jid, fromMe, hasMsg: !!msg.message }, "[whatsapp] raw message");
+
+      if (fromMe) continue;
 
       // Only handle direct messages
       if (!jid.endsWith("@s.whatsapp.net")) continue;
 
       const msgId = msg.key.id ?? "";
       if (isDuplicate(msgId)) {
-        logger.debug({ msgId }, "[whatsapp] Skipping duplicate message");
+        logger.info({ msgId }, "[whatsapp] Skipping duplicate message");
         continue;
       }
 
       const text =
         msg.message?.conversation ??
         msg.message?.extendedTextMessage?.text ??
+        msg.message?.ephemeralMessage?.message?.conversation ??
+        msg.message?.ephemeralMessage?.message?.extendedTextMessage?.text ??
         "";
 
-      if (!text) continue;
+      if (!text) {
+        logger.info({ msgId, keys: Object.keys(msg.message ?? {}) }, "[whatsapp] No text in message");
+        continue;
+      }
 
       logger.info({ jid, msgId }, "[whatsapp] Incoming message");
 
