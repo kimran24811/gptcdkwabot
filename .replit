@@ -1,4 +1,4 @@
-modules = ["nodejs-24"]
+modules = ["nodejs-24", "postgresql-16"]
 
 [[artifacts]]
 id = "artifacts/api-server"
@@ -31,3 +31,6 @@ timeoutMs = 20000
 ADMIN_TOKEN = "9abf5bb3cfb61cae555e201dcccbd6fbabae9c29420d29df"
 CDK_API_BASE = "https://keys.ovh/api/v1"
 GMAIL_USER = "emraankhalid2046@gmail.com"
+
+[nix]
+channel = "stable-25_05"
