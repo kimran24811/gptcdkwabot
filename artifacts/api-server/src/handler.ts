@@ -453,11 +453,39 @@ export async function handleMessage(
       );
     } else {
       userStates.set(stateKey, state);
-      await sendReply(
-        await getMsg(tenantId, "msg_activation_fail", MSG_DEFAULTS.msg_activation_fail, {
-          error: activation.errorMessage ?? "Unknown error",
-        })
-      );
+
+      // Special error cases get dedicated helpful messages
+      const errCode = activation.errorMessage ?? "";
+      if (errCode === "__truncated__") {
+        await sendReply(
+          `❌ *Your session JSON appears to be cut off.*\n\n` +
+          `WhatsApp truncates very long messages. Please:\n` +
+          `1. Open *chat.openai.com/api/auth/session* in your browser\n` +
+          `2. Copy the *entire* page content (Select All → Copy)\n` +
+          `3. Paste it here again\n\n` +
+          `Make sure the text ends with *}* and contains \`"accessToken"\`.`
+        );
+      } else if (
+        errCode.toLowerCase().includes("token") ||
+        errCode.toLowerCase().includes("invalid") ||
+        errCode.toLowerCase().includes("validation")
+      ) {
+        await sendReply(
+          `❌ *Session token rejected by the server.*\n\n` +
+          `This usually means the token has *expired* (they last ~2 hours).\n\n` +
+          `Please:\n` +
+          `1. Open *chat.openai.com/api/auth/session* in your browser\n` +
+          `2. Copy the full page content again (it will be fresh)\n` +
+          `3. Paste it here\n\n` +
+          `Type * to start over.`
+        );
+      } else {
+        await sendReply(
+          await getMsg(tenantId, "msg_activation_fail", MSG_DEFAULTS.msg_activation_fail, {
+            error: errCode || "Unknown error",
+          })
+        );
+      }
     }
     return;
   }

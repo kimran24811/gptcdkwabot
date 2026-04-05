@@ -75,20 +75,31 @@ export async function checkKey(key: string): Promise<CheckKeyResult> {
  * The user pastes the full JSON from chat.openai.com/api/auth/session,
  * but the CDK API only wants the accessToken string.
  */
-function extractAccessToken(raw: string): string {
+function extractAccessToken(raw: string): { token: string; truncated: boolean } {
   const t = raw.trim();
   if (t.startsWith("{")) {
     try {
       const parsed = JSON.parse(t) as Record<string, unknown>;
-      if (typeof parsed["accessToken"] === "string") return parsed["accessToken"];
+      if (typeof parsed["accessToken"] === "string") {
+        const token = parsed["accessToken"];
+        const parts = token.split(".");
+        return { token, truncated: parts.length < 3 };
+      }
     } catch {
       // truncated JSON — try regex
       const m = t.match(/"accessToken"\s*:\s*"([^"]+)"/);
-      if (m) return m[1]!;
+      if (m) {
+        const token = m[1]!;
+        const parts = token.split(".");
+        // If JSON was truncated the JWT itself may be cut mid-segment
+        const jsonTruncated = !t.trimEnd().endsWith("}");
+        return { token, truncated: parts.length < 3 || jsonTruncated };
+      }
     }
   }
   // Already a raw JWT or unknown format — use as-is
-  return t;
+  const parts = t.split(".");
+  return { token: t, truncated: parts.length < 3 };
 }
 
 export async function activateKey(
@@ -99,9 +110,26 @@ export async function activateKey(
     // Correct endpoint: /api/v1/activate (not /key/activate)
     const url = `${getBase()}/activate`;
     // CDK API expects "user_token" = the accessToken JWT, not the full JSON blob
-    const user_token = extractAccessToken(sessionToken);
+    const { token: user_token, truncated } = extractAccessToken(sessionToken);
 
-    logger.info({ key, tokenLength: user_token.length }, "[cdk] activateKey calling API");
+    logger.info(
+      {
+        key,
+        tokenLength: user_token.length,
+        truncated,
+        tokenStart: user_token.slice(0, 30),
+        tokenEnd: user_token.slice(-20),
+        jwtParts: user_token.split(".").length,
+      },
+      "[cdk] activateKey calling API"
+    );
+
+    if (truncated) {
+      return {
+        success: false,
+        errorMessage: "__truncated__",
+      };
+    }
 
     const res = await fetch(url, {
       method: "POST",
