@@ -11,11 +11,13 @@ import {
   addKeys,
   deleteKey,
   getKeyStats,
-  listPayments,
-  listCustomerBalances,
+  listOrders,
+  getOrderById,
+  updateOrderStatus,
+  cancelOrder,
 } from "./db.js";
 import { waManager } from "./wa-manager.js";
-import { PLAN_CODES, PLAN_LABELS, MSG_DEFAULTS } from "./handler.js";
+import { deliverKeys } from "./handler.js";
 import { logger } from "./lib/logger.js";
 
 const router: IRouter = Router();
@@ -34,12 +36,7 @@ interface AuthRequest extends Request {
 function authMiddleware(req: AuthRequest, res: Response, next: NextFunction): void {
   const auth = req.headers["authorization"] ?? "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : (req.query["token"] as string ?? "");
-
-  if (!token) {
-    res.status(401).json({ error: "Authorization required" });
-    return;
-  }
-
+  if (!token) { res.status(401).json({ error: "Authorization required" }); return; }
   try {
     const payload = jwt.verify(token, JWT_SECRET) as AuthPayload;
     req.tenant = payload;
@@ -53,30 +50,14 @@ function authMiddleware(req: AuthRequest, res: Response, next: NextFunction): vo
 
 router.post("/register", async (req: Request, res: Response) => {
   const { email, password } = req.body as { email?: string; password?: string };
-
-  if (!email || !password) {
-    res.status(400).json({ error: "Email and password are required" });
-    return;
-  }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    res.status(400).json({ error: "Invalid email address" });
-    return;
-  }
-  if (password.length < 8) {
-    res.status(400).json({ error: "Password must be at least 8 characters" });
-    return;
-  }
-
+  if (!email || !password) { res.status(400).json({ error: "Email and password are required" }); return; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { res.status(400).json({ error: "Invalid email address" }); return; }
+  if (password.length < 8) { res.status(400).json({ error: "Password must be at least 8 characters" }); return; }
   try {
     const existing = await findTenantByEmail(email.toLowerCase());
-    if (existing) {
-      res.status(409).json({ error: "An account with this email already exists" });
-      return;
-    }
-
+    if (existing) { res.status(409).json({ error: "An account with this email already exists" }); return; }
     const passwordHash = await bcrypt.hash(password, 12);
     const tenantId = await createTenant(email.toLowerCase(), passwordHash);
-
     const token = jwt.sign({ tenantId, email: email.toLowerCase() }, JWT_SECRET, { expiresIn: "30d" });
     res.json({ token, tenantId, email: email.toLowerCase() });
   } catch (err) {
@@ -87,25 +68,12 @@ router.post("/register", async (req: Request, res: Response) => {
 
 router.post("/login", async (req: Request, res: Response) => {
   const { email, password } = req.body as { email?: string; password?: string };
-
-  if (!email || !password) {
-    res.status(400).json({ error: "Email and password are required" });
-    return;
-  }
-
+  if (!email || !password) { res.status(400).json({ error: "Email and password are required" }); return; }
   try {
     const tenant = await findTenantByEmail(email.toLowerCase());
-    if (!tenant) {
-      res.status(401).json({ error: "Invalid email or password" });
-      return;
-    }
-
+    if (!tenant) { res.status(401).json({ error: "Invalid email or password" }); return; }
     const valid = await bcrypt.compare(password, tenant.password_hash);
-    if (!valid) {
-      res.status(401).json({ error: "Invalid email or password" });
-      return;
-    }
-
+    if (!valid) { res.status(401).json({ error: "Invalid email or password" }); return; }
     const token = jwt.sign({ tenantId: tenant.id, email: tenant.email }, JWT_SECRET, { expiresIn: "30d" });
     res.json({ token, tenantId: tenant.id, email: tenant.email });
   } catch (err) {
@@ -119,13 +87,7 @@ router.get("/me", authMiddleware, async (req: AuthRequest, res: Response) => {
     const tenant = await getTenantById(req.tenant!.tenantId);
     if (!tenant) { res.status(404).json({ error: "Account not found" }); return; }
     const botState = waManager.getState(req.tenant!.tenantId);
-    res.json({
-      tenantId: tenant.id,
-      email: tenant.email,
-      createdAt: tenant.created_at,
-      connected: botState.connected,
-      phone: botState.phone,
-    });
+    res.json({ tenantId: tenant.id, email: tenant.email, createdAt: tenant.created_at, connected: botState.connected, phone: botState.phone });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -134,30 +96,22 @@ router.get("/me", authMiddleware, async (req: AuthRequest, res: Response) => {
 // ── Bot management ─────────────────────────────────────────────────────────────
 
 router.get("/bot/status", authMiddleware, (req: AuthRequest, res: Response) => {
-  const tenantId = req.tenant!.tenantId;
-  const state = waManager.getState(tenantId);
-  res.json({
-    connected: state.connected,
-    qr: state.qrDataUrl,
-    phone: state.phone,
-  });
+  const state = waManager.getState(req.tenant!.tenantId);
+  res.json({ connected: state.connected, qr: state.qrDataUrl, phone: state.phone });
 });
 
 router.post("/bot/start", authMiddleware, async (req: AuthRequest, res: Response) => {
-  const tenantId = req.tenant!.tenantId;
   try {
-    await waManager.startSession(tenantId);
+    await waManager.startSession(req.tenant!.tenantId);
     res.json({ ok: true, message: "Bot session starting. Scan the QR code." });
   } catch (err) {
-    logger.error({ err, tenantId }, "[platform] Failed to start session");
     res.status(500).json({ error: String(err) });
   }
 });
 
 router.post("/bot/stop", authMiddleware, async (req: AuthRequest, res: Response) => {
-  const tenantId = req.tenant!.tenantId;
   try {
-    await waManager.stopSession(tenantId);
+    await waManager.stopSession(req.tenant!.tenantId);
     res.json({ ok: true, message: "Bot session stopped." });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -169,9 +123,7 @@ router.post("/bot/stop", authMiddleware, async (req: AuthRequest, res: Response)
 router.get("/settings", authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const settings = await getAllTenantSettings(req.tenant!.tenantId);
-    // Never expose gmail password to frontend
-    const safe = { ...settings, gmail_password: settings.gmail_password ? "••••••••" : "" };
-    res.json(safe);
+    res.json(settings);
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -179,57 +131,16 @@ router.get("/settings", authMiddleware, async (req: AuthRequest, res: Response) 
 
 router.post("/settings", authMiddleware, async (req: AuthRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
-  const allowed = [
-    "bot_name", "account_number", "bank_name", "account_title",
-    "price_1mo_plus", "price_12mo_plus", "price_12mo_go",
-    "gmail_user", "gmail_password",
-  ];
+  const allowed = ["bot_name", "binance_id", "binance_user", "bsc_address"];
   try {
     const body = req.body as Record<string, string>;
     await Promise.all(
       Object.entries(body)
-        .filter(([k, v]) => allowed.includes(k) && v !== "••••••••")
+        .filter(([k]) => allowed.includes(k))
         .map(([k, v]) => setTenantSetting(tenantId, k, String(v)))
     );
     res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-});
-
-// ── Messages ───────────────────────────────────────────────────────────────────
-
-const MSG_KEYS = Object.keys(MSG_DEFAULTS) as Array<keyof typeof MSG_DEFAULTS>;
-
-router.get("/messages", authMiddleware, async (req: AuthRequest, res: Response) => {
-  try {
-    const settings = await getAllTenantSettings(req.tenant!.tenantId);
-    // Return current value if set, otherwise the default (so frontend always has something to display)
-    const messages: Record<string, { current: string; default: string }> = {};
-    for (const key of MSG_KEYS) {
-      messages[key] = {
-        current: settings[key] ?? "",
-        default: MSG_DEFAULTS[key],
-      };
-    }
-    res.json(messages);
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-});
-
-router.post("/messages", authMiddleware, async (req: AuthRequest, res: Response) => {
-  const tenantId = req.tenant!.tenantId;
-  try {
-    const body = req.body as Record<string, string>;
-    await Promise.all(
-      Object.entries(body)
-        .filter(([k]) => (MSG_KEYS as string[]).includes(k))
-        .map(([k, v]) => setTenantSetting(tenantId, k, String(v)))
-    );
-    res.json({ ok: true });
-  } catch (err) {
-    logger.error({ err, tenantId }, "[platform] Failed to save messages");
     res.status(500).json({ error: String(err) });
   }
 });
@@ -238,10 +149,9 @@ router.post("/messages", authMiddleware, async (req: AuthRequest, res: Response)
 
 router.get("/keys", authMiddleware, async (req: AuthRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
-  const plan = typeof req.query["plan"] === "string" ? req.query["plan"] : undefined;
   try {
-    const [keys, stats] = await Promise.all([listKeys(tenantId, plan), getKeyStats(tenantId)]);
-    res.json({ keys, stats, planLabels: PLAN_LABELS });
+    const [keys, stats] = await Promise.all([listKeys(tenantId), getKeyStats(tenantId)]);
+    res.json({ keys, stats });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -249,16 +159,11 @@ router.get("/keys", authMiddleware, async (req: AuthRequest, res: Response) => {
 
 router.post("/keys", authMiddleware, async (req: AuthRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
-  const { plan, keys_text } = req.body as { plan?: string; keys_text?: string };
-  if (!plan || !PLAN_CODES.includes(plan as never)) {
-    res.status(400).json({ error: "Invalid plan" }); return;
-  }
-  if (!keys_text?.trim()) {
-    res.status(400).json({ error: "No keys provided" }); return;
-  }
+  const { keys_text } = req.body as { keys_text?: string };
+  if (!keys_text?.trim()) { res.status(400).json({ error: "No keys provided" }); return; }
   try {
     const keysList = keys_text.split(/[\n,]+/).map((k: string) => k.trim()).filter(Boolean);
-    const added = await addKeys(tenantId, plan, keysList);
+    const added = await addKeys(tenantId, "chatgpt_plus", keysList);
     res.json({ ok: true, added });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -266,28 +171,60 @@ router.post("/keys", authMiddleware, async (req: AuthRequest, res: Response) => 
 });
 
 router.delete("/keys/:id", authMiddleware, async (req: AuthRequest, res: Response) => {
-  const tenantId = req.tenant!.tenantId;
   try {
-    await deleteKey(tenantId, Number(req.params["id"]));
+    await deleteKey(req.tenant!.tenantId, Number(req.params["id"]));
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
-// ── Payments & Customers ──────────────────────────────────────────────────────
+// ── Orders ─────────────────────────────────────────────────────────────────────
 
-router.get("/payments", authMiddleware, async (req: AuthRequest, res: Response) => {
+router.get("/orders", authMiddleware, async (req: AuthRequest, res: Response) => {
+  const tenantId = req.tenant!.tenantId;
+  const status = typeof req.query["status"] === "string" ? req.query["status"] : undefined;
   try {
-    res.json(await listPayments(req.tenant!.tenantId));
+    res.json(await listOrders(tenantId, status));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
-router.get("/customers", authMiddleware, async (req: AuthRequest, res: Response) => {
+router.post("/orders/:id/confirm", authMiddleware, async (req: AuthRequest, res: Response) => {
+  const tenantId = req.tenant!.tenantId;
+  const orderId = Number(req.params["id"]);
   try {
-    res.json(await listCustomerBalances(req.tenant!.tenantId));
+    const order = await getOrderById(tenantId, orderId);
+    if (!order) { res.status(404).json({ error: "Order not found" }); return; }
+    if (order.status !== "pending") { res.status(400).json({ error: `Order is already ${order.status}` }); return; }
+
+    const sendFn = async (msg: string) => {
+      await waManager.sendMessage(tenantId, order.jid, msg);
+    };
+
+    const { keys, shortfall } = await deliverKeys(tenantId, order.jid, order.quantity, sendFn);
+
+    const newStatus = shortfall === order.quantity ? "confirmed" : "delivered";
+    await updateOrderStatus(tenantId, orderId, newStatus, keys.length > 0 ? keys : undefined);
+
+    logger.info({ tenantId, orderId, keysDelivered: keys.length, shortfall }, "[platform] Order confirmed");
+    res.json({ ok: true, keysDelivered: keys.length, shortfall });
+  } catch (err) {
+    logger.error({ err, tenantId, orderId }, "[platform] Order confirm failed");
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.post("/orders/:id/cancel", authMiddleware, async (req: AuthRequest, res: Response) => {
+  const tenantId = req.tenant!.tenantId;
+  const orderId = Number(req.params["id"]);
+  try {
+    const order = await getOrderById(tenantId, orderId);
+    if (!order) { res.status(404).json({ error: "Order not found" }); return; }
+    if (order.status !== "pending") { res.status(400).json({ error: `Order is already ${order.status}` }); return; }
+    await cancelOrder(tenantId, orderId);
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

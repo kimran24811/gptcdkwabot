@@ -4,9 +4,7 @@ import AuthPage from "@/pages/Auth";
 import DashboardPage from "@/pages/Dashboard";
 import SettingsPage from "@/pages/Settings";
 import KeysPage from "@/pages/Keys";
-import PaymentsPage from "@/pages/Payments";
-import CustomersPage from "@/pages/Customers";
-import MessagesPage from "@/pages/Messages";
+import OrdersPage from "@/pages/Orders";
 import Layout from "@/components/Layout";
 
 const queryClient = new QueryClient({
@@ -31,9 +29,7 @@ function Router() {
       <Route path="/dashboard" component={() => <ProtectedRoute component={DashboardPage} />} />
       <Route path="/settings" component={() => <ProtectedRoute component={SettingsPage} />} />
       <Route path="/keys" component={() => <ProtectedRoute component={KeysPage} />} />
-      <Route path="/payments" component={() => <ProtectedRoute component={PaymentsPage} />} />
-      <Route path="/customers" component={() => <ProtectedRoute component={CustomersPage} />} />
-      <Route path="/messages" component={() => <ProtectedRoute component={MessagesPage} />} />
+      <Route path="/orders" component={() => <ProtectedRoute component={OrdersPage} />} />
       <Route component={() => <Redirect to="/dashboard" />} />
     </Switch>
   );

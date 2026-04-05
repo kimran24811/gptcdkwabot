@@ -10,7 +10,8 @@ import {
   listPayments,
   listCustomerBalances,
 } from "./db.js";
-import { PLAN_LABELS, PLAN_CODES } from "./handler.js";
+const PLAN_CODES = ["chatgpt_plus"] as const;
+const PLAN_LABELS: Record<string, string> = { "chatgpt_plus": "ChatGPT Plus CDK" };
 
 const router: IRouter = Router();
 

@@ -164,6 +164,12 @@ class WAManager {
     });
   }
 
+  async sendMessage(tenantId: number, jid: string, text: string): Promise<void> {
+    const sock = this.sockets.get(tenantId);
+    if (!sock) throw new Error(`No active WhatsApp session for tenant ${tenantId}`);
+    await sock.sendMessage(jid, { text });
+  }
+
   async stopSession(tenantId: number): Promise<void> {
     const sock = this.sockets.get(tenantId);
     if (sock) {

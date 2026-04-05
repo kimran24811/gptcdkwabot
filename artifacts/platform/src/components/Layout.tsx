@@ -6,10 +6,8 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 const navItems = [
   { path: "/dashboard", label: "Dashboard", icon: "📊" },
-  { path: "/keys", label: "Keys", icon: "🔑" },
-  { path: "/payments", label: "Payments", icon: "💳" },
-  { path: "/customers", label: "Customers", icon: "👥" },
-  { path: "/messages", label: "Bot Messages", icon: "💬" },
+  { path: "/orders", label: "Orders", icon: "📋" },
+  { path: "/keys", label: "Key Inventory", icon: "🔑" },
   { path: "/settings", label: "Settings", icon: "⚙️" },
 ];
 
@@ -34,7 +32,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <span className="text-2xl">🤖</span>
             <div>
               <div className="font-bold text-gray-900 text-sm leading-tight">Bot Platform</div>
-              <div className="text-xs text-gray-400">WhatsApp CDK Bot</div>
+              <div className="text-xs text-gray-400">ChatGPT Plus CDK</div>
             </div>
           </div>
         </div>

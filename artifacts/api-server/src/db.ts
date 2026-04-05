@@ -67,6 +67,19 @@ export async function initDb(): Promise<void> {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS orders (
+      id SERIAL PRIMARY KEY,
+      tenant_id INTEGER NOT NULL DEFAULT 1,
+      jid TEXT NOT NULL,
+      quantity INTEGER NOT NULL,
+      price_per_key NUMERIC(10,2) NOT NULL,
+      total_usd NUMERIC(10,2) NOT NULL,
+      tx_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      keys_delivered TEXT[],
+      created_at TIMESTAMP DEFAULT NOW()
+    );
   `);
 
   await pool.query(`
@@ -166,29 +179,9 @@ export async function seedFirstTenantIfEmpty(): Promise<void> {
 async function seedTenantSettings(tenantId: number): Promise<void> {
   const defaults = [
     ["bot_name", "ChatGPT Bot"],
-    ["account_number", ""],
-    ["bank_name", "Nayapay"],
-    ["account_title", ""],
-    ["price_1mo_plus", "620"],
-    ["price_12mo_plus", "7500"],
-    ["price_12mo_go", "1400"],
-    ["gmail_user", ""],
-    ["gmail_password", ""],
-    // Message templates — blank means use hardcoded defaults in handler.ts
-    ["msg_welcome", ""],
-    ["msg_activate_prompt", ""],
-    ["msg_invalid_key", ""],
-    ["msg_key_verified", ""],
-    ["msg_bad_session", ""],
-    ["msg_activation_ok", ""],
-    ["msg_activation_fail", ""],
-    ["msg_qty_prompt", ""],
-    ["msg_payment_ask_title", ""],
-    ["msg_payment_retry", ""],
-    ["msg_payment_noconfig", ""],
-    ["msg_keys_delivered", ""],
-    ["msg_no_keys", ""],
-    ["msg_duplicate_email", ""],
+    ["binance_id", "552780449"],
+    ["binance_user", "User-1d9f7"],
+    ["bsc_address", "0x0c31c91ec2cbb607aeca28c1bc09c55352db2fea"],
   ];
   for (const [key, value] of defaults) {
     await pool.query(
@@ -400,6 +393,84 @@ export async function listPayments(tenantId: number): Promise<
     [tenantId]
   );
   return rows;
+}
+
+// ── Orders ─────────────────────────────────────────────────────────────────────
+
+export async function createOrder(
+  tenantId: number,
+  jid: string,
+  quantity: number,
+  pricePerKey: number,
+  totalUsd: number,
+  txId: string
+): Promise<number> {
+  const { rows } = await pool.query<{ id: number }>(
+    `INSERT INTO orders (tenant_id, jid, quantity, price_per_key, total_usd, tx_id, status)
+     VALUES ($1, $2, $3, $4, $5, $6, 'pending') RETURNING id`,
+    [tenantId, jid, quantity, pricePerKey, totalUsd, txId]
+  );
+  return rows[0]!.id;
+}
+
+export async function listOrders(tenantId: number, status?: string): Promise<Array<{
+  id: number;
+  jid: string;
+  quantity: number;
+  price_per_key: string;
+  total_usd: string;
+  tx_id: string;
+  status: string;
+  keys_delivered: string[] | null;
+  created_at: string;
+}>> {
+  const { rows } = status
+    ? await pool.query(
+        "SELECT id, jid, quantity, price_per_key, total_usd, tx_id, status, keys_delivered, created_at FROM orders WHERE tenant_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT 200",
+        [tenantId, status]
+      )
+    : await pool.query(
+        "SELECT id, jid, quantity, price_per_key, total_usd, tx_id, status, keys_delivered, created_at FROM orders WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 200",
+        [tenantId]
+      );
+  return rows;
+}
+
+export async function getOrderById(tenantId: number, orderId: number): Promise<{
+  id: number;
+  jid: string;
+  quantity: number;
+  price_per_key: string;
+  total_usd: string;
+  tx_id: string;
+  status: string;
+  keys_delivered: string[] | null;
+  created_at: string;
+} | null> {
+  const { rows } = await pool.query(
+    "SELECT id, jid, quantity, price_per_key, total_usd, tx_id, status, keys_delivered, created_at FROM orders WHERE id = $1 AND tenant_id = $2",
+    [orderId, tenantId]
+  );
+  return rows[0] ?? null;
+}
+
+export async function updateOrderStatus(
+  tenantId: number,
+  orderId: number,
+  status: string,
+  keysDelivered?: string[]
+): Promise<void> {
+  await pool.query(
+    "UPDATE orders SET status = $3, keys_delivered = $4 WHERE id = $1 AND tenant_id = $2",
+    [orderId, tenantId, status, keysDelivered ?? null]
+  );
+}
+
+export async function cancelOrder(tenantId: number, orderId: number): Promise<void> {
+  await pool.query(
+    "UPDATE orders SET status = 'cancelled' WHERE id = $1 AND tenant_id = $2 AND status = 'pending'",
+    [orderId, tenantId]
+  );
 }
 
 // ── Legacy single-tenant helpers (admin panel compat) ─────────────────────────

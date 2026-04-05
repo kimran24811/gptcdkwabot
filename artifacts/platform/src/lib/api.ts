@@ -36,17 +36,27 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return data;
 }
 
+export type OrderRow = {
+  id: number;
+  jid: string;
+  quantity: number;
+  price_per_key: string;
+  total_usd: string;
+  tx_id: string;
+  status: string;
+  keys_delivered: string[] | null;
+  created_at: string;
+};
+
 export const api = {
   register: (email: string, password: string) =>
     request<{ token: string; tenantId: number; email: string }>("/register", {
-      method: "POST",
-      body: JSON.stringify({ email, password }),
+      method: "POST", body: JSON.stringify({ email, password }),
     }),
 
   login: (email: string, password: string) =>
     request<{ token: string; tenantId: number; email: string }>("/login", {
-      method: "POST",
-      body: JSON.stringify({ email, password }),
+      method: "POST", body: JSON.stringify({ email, password }),
     }),
 
   me: () =>
@@ -56,7 +66,6 @@ export const api = {
     request<{ connected: boolean; qr: string | null; phone: string | null }>("/bot/status"),
 
   startBot: () => request<{ ok: boolean; message: string }>("/bot/start", { method: "POST" }),
-
   stopBot: () => request<{ ok: boolean; message: string }>("/bot/stop", { method: "POST" }),
 
   getSettings: () => request<Record<string, string>>("/settings"),
@@ -64,28 +73,24 @@ export const api = {
   saveSettings: (settings: Record<string, string>) =>
     request<{ ok: boolean }>("/settings", { method: "POST", body: JSON.stringify(settings) }),
 
-  getKeys: (plan?: string) =>
+  getKeys: () =>
     request<{
       keys: Array<{ id: number; plan: string; key_value: string; is_used: boolean; used_at: string | null; used_by_jid: string | null; created_at: string }>;
       stats: Array<{ plan: string; total: number; available: number }>;
-      planLabels: Record<string, string>;
-    }>(`/keys${plan ? `?plan=${plan}` : ""}`),
+    }>("/keys"),
 
-  addKeys: (plan: string, keys_text: string) =>
-    request<{ ok: boolean; added: number }>("/keys", { method: "POST", body: JSON.stringify({ plan, keys_text }) }),
+  addKeys: (keys_text: string) =>
+    request<{ ok: boolean; added: number }>("/keys", { method: "POST", body: JSON.stringify({ keys_text }) }),
 
   deleteKey: (id: number) =>
     request<{ ok: boolean }>(`/keys/${id}`, { method: "DELETE" }),
 
-  getPayments: () =>
-    request<Array<{ id: number; jid: string; txid: string; raast_last4: string | null; amount: string | null; verified: boolean; plan: string | null; quantity: number | null; created_at: string }>>("/payments"),
+  getOrders: (status?: string) =>
+    request<OrderRow[]>(`/orders${status ? `?status=${status}` : ""}`),
 
-  getCustomers: () =>
-    request<Array<{ jid: string; total_spent: string; total_keys: number; last_purchase_at: string | null; first_purchase_at: string | null }>>("/customers"),
+  confirmOrder: (id: number) =>
+    request<{ ok: boolean; keysDelivered: number; shortfall: number }>(`/orders/${id}/confirm`, { method: "POST" }),
 
-  getMessages: () =>
-    request<Record<string, { current: string; default: string }>>("/messages"),
-
-  saveMessages: (messages: Record<string, string>) =>
-    request<{ ok: boolean }>("/messages", { method: "POST", body: JSON.stringify(messages) }),
+  cancelOrder: (id: number) =>
+    request<{ ok: boolean }>(`/orders/${id}/cancel`, { method: "POST" }),
 };
