@@ -96,13 +96,18 @@ function isCdkKeyFormat(text: string): boolean {
 function isSessionToken(text: string): boolean {
   const t = text.trim();
   if (!t.startsWith("{")) return false;
+  // Try strict JSON parse first
   try {
     const p = JSON.parse(t) as Record<string, unknown>;
-    return (
-      typeof p["accessToken"] === "string" ||
-      (typeof p["user"] === "object" && p["user"] !== null)
-    );
-  } catch { return false; }
+    if (typeof p["accessToken"] === "string") return true;
+    if (typeof p["user"] === "object" && p["user"] !== null) return true;
+  } catch { /* may be truncated — fall through to pattern match */ }
+  // Fallback: pattern match for key fields that appear early in the JSON
+  // (handles WhatsApp truncating very long messages)
+  return (
+    t.includes('"accessToken"') ||
+    (t.includes('"user"') && t.includes('"email"') && t.includes('"idp"'))
+  );
 }
 
 function discountRate(qty: number): number {
@@ -351,6 +356,15 @@ export async function handleMessage(
 
   // ── ACTIVATE: awaiting CDK key ────────────────────────────────────────────
   if (state.stage === "activate_awaiting_key") {
+    // If they sent a session token JSON instead of CDK key, give a clear hint
+    if (isSessionToken(trimmed)) {
+      await sendReply(
+        "⚠️ Please send your *CDK key* first (not the session token).\n\n" +
+        "The CDK key is a short code (e.g. ABC-12345).\n" +
+        "Type * to go back to the main menu and start over."
+      );
+      return;
+    }
     if (!isCdkKeyFormat(trimmed)) {
       await sendReply(await getMsg(tenantId, "msg_invalid_key", MSG_DEFAULTS.msg_invalid_key));
       return;

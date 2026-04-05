@@ -64,6 +64,8 @@ class WAManager {
       logger: baileysLogger,
       printQRInTerminal: false,
       markOnlineOnConnect: false,
+      // Prevent AwaitingInitialSync timeout reconnection loop
+      syncFullHistory: false,
     });
 
     this.sockets.set(tenantId, sock);
