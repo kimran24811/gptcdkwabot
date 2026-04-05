@@ -142,6 +142,27 @@ export async function getAllTenants(): Promise<Array<{ id: number; email: string
   return rows;
 }
 
+export async function seedFirstTenantIfEmpty(): Promise<void> {
+  const { rows } = await pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM tenants");
+  if (parseInt(rows[0]?.count ?? "0", 10) > 0) return;
+
+  const seedEmail = process.env["SEED_EMAIL"] ?? "admin@bot.local";
+  const seedPassword = process.env["ADMIN_TOKEN"] ?? process.env["SEED_PASSWORD"] ?? "changeme123";
+
+  const bcrypt = await import("bcryptjs");
+  const hash = await bcrypt.hash(seedPassword, 12);
+
+  const { rows: inserted } = await pool.query<{ id: number }>(
+    "INSERT INTO tenants (email, password_hash) VALUES ($1, $2) ON CONFLICT (email) DO NOTHING RETURNING id",
+    [seedEmail, hash]
+  );
+
+  if (inserted.length > 0) {
+    await seedTenantSettings(inserted[0]!.id);
+    logger.info({ email: seedEmail, tenantId: inserted[0]!.id }, "[db] Seeded first tenant from ADMIN_TOKEN");
+  }
+}
+
 async function seedTenantSettings(tenantId: number): Promise<void> {
   const defaults = [
     ["bot_name", "ChatGPT Bot"],

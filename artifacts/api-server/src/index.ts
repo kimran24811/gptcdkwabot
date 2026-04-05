@@ -1,7 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { waManager } from "./wa-manager.js";
-import { initDb, getAllTenants } from "./db.js";
+import { initDb, getAllTenants, seedFirstTenantIfEmpty } from "./db.js";
 
 const rawPort = process.env["PORT"];
 
@@ -26,6 +26,7 @@ const server = app.listen(port, (err) => {
   initDb()
     .then(async () => {
       logger.info("[startup] DB ready — reconnecting tenant WhatsApp sessions");
+      await seedFirstTenantIfEmpty();
       const tenants = await getAllTenants();
       await waManager.initAllSessions(tenants.map((t) => t.id));
       logger.info({ count: tenants.length }, "[startup] Session init complete");
