@@ -383,7 +383,19 @@ export async function handleMessage(
       await sendReply("⚠️ Could not reach the key server right now. Please try again in a moment.");
       return;
     }
-    // status is "available" or "used" — always proceed and let activateKey decide
+    // Key is already used — inform the customer clearly and stop
+    if (result.status === "used") {
+      const when = result.activatedAt
+        ? ` on ${new Date(result.activatedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`
+        : "";
+      const forEmail = result.activatedEmail ? ` for *${result.activatedEmail}*` : "";
+      await sendReply(
+        `❌ This key was already activated${when}${forEmail}.\n\n` +
+        `Please use a different key or contact your seller.\n\nType * for the main menu.`
+      );
+      return;
+    }
+    // status is "available" — proceed to session token step
     state.stage = "activate_awaiting_session";
     state.cdkKey = trimmed;
     userStates.set(stateKey, state);
@@ -404,7 +416,17 @@ export async function handleMessage(
         await sendReply("❌ That key is not valid. Please send the session token JSON or a different CDK key.");
         return;
       }
-      // "available", "used", or "error" — accept and let activateKey decide
+      if (result.status === "used") {
+        const when = result.activatedAt
+          ? ` on ${new Date(result.activatedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`
+          : "";
+        const forEmail = result.activatedEmail ? ` for *${result.activatedEmail}*` : "";
+        await sendReply(
+          `❌ This key was already activated${when}${forEmail}.\n\nPlease use a different key.\n\nType * for the main menu.`
+        );
+        return;
+      }
+      // "available" — update stored key and ask for session token
       state.cdkKey = trimmed;
       userStates.set(stateKey, state);
       const planInfo = (result.subscription ?? result.product)

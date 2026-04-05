@@ -16,6 +16,9 @@ export interface CheckKeyResult {
   status: KeyStatus;
   product?: string;
   subscription?: string;
+  // Populated when status === "used"
+  activatedAt?: string;
+  activatedEmail?: string;
 }
 
 export interface ActivateKeyResult {
@@ -32,7 +35,13 @@ export async function checkKey(key: string): Promise<CheckKeyResult> {
     const res = await fetch(url, { headers: authHeaders() });
     const json = (await res.json()) as {
       success: boolean;
-      data?: { status: string; product?: string; subscription?: string };
+      data?: {
+        status: string;
+        product?: string;
+        subscription?: string;
+        activated_at?: string;
+        email?: string;
+      };
       error?: string;
     };
 
@@ -52,6 +61,8 @@ export async function checkKey(key: string): Promise<CheckKeyResult> {
       status,
       product: json.data?.product,
       subscription: json.data?.subscription,
+      activatedAt: json.data?.activated_at,
+      activatedEmail: json.data?.email,
     };
   } catch (err) {
     logger.error({ err }, "[cdk] checkKey failed");
