@@ -369,6 +369,7 @@ export async function handleMessage(
       await sendReply(await getMsg(tenantId, "msg_invalid_key", MSG_DEFAULTS.msg_invalid_key));
       return;
     }
+    await sendReply("⏳ Checking your key, please wait...");
     const result = await checkKey(trimmed);
     if (result.status === "invalid") {
       await sendReply(await getMsg(tenantId, "msg_invalid_key", MSG_DEFAULTS.msg_invalid_key));
