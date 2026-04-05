@@ -15,7 +15,7 @@ import {
   listCustomerBalances,
 } from "./db.js";
 import { waManager } from "./wa-manager.js";
-import { PLAN_CODES, PLAN_LABELS } from "./handler.js";
+import { PLAN_CODES, PLAN_LABELS, MSG_DEFAULTS } from "./handler.js";
 import { logger } from "./lib/logger.js";
 
 const router: IRouter = Router();
@@ -193,6 +193,43 @@ router.post("/settings", authMiddleware, async (req: AuthRequest, res: Response)
     );
     res.json({ ok: true });
   } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ── Messages ───────────────────────────────────────────────────────────────────
+
+const MSG_KEYS = Object.keys(MSG_DEFAULTS) as Array<keyof typeof MSG_DEFAULTS>;
+
+router.get("/messages", authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const settings = await getAllTenantSettings(req.tenant!.tenantId);
+    // Return current value if set, otherwise the default (so frontend always has something to display)
+    const messages: Record<string, { current: string; default: string }> = {};
+    for (const key of MSG_KEYS) {
+      messages[key] = {
+        current: settings[key] ?? "",
+        default: MSG_DEFAULTS[key],
+      };
+    }
+    res.json(messages);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.post("/messages", authMiddleware, async (req: AuthRequest, res: Response) => {
+  const tenantId = req.tenant!.tenantId;
+  try {
+    const body = req.body as Record<string, string>;
+    await Promise.all(
+      Object.entries(body)
+        .filter(([k]) => (MSG_KEYS as string[]).includes(k))
+        .map(([k, v]) => setTenantSetting(tenantId, k, String(v)))
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err, tenantId }, "[platform] Failed to save messages");
     res.status(500).json({ error: String(err) });
   }
 });

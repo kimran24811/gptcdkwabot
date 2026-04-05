@@ -82,4 +82,10 @@ export const api = {
 
   getCustomers: () =>
     request<Array<{ jid: string; total_spent: string; total_keys: number; last_purchase_at: string | null; first_purchase_at: string | null }>>("/customers"),
+
+  getMessages: () =>
+    request<Record<string, { current: string; default: string }>>("/messages"),
+
+  saveMessages: (messages: Record<string, string>) =>
+    request<{ ok: boolean }>("/messages", { method: "POST", body: JSON.stringify(messages) }),
 };

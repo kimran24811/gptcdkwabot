@@ -174,6 +174,21 @@ async function seedTenantSettings(tenantId: number): Promise<void> {
     ["price_12mo_go", "1400"],
     ["gmail_user", ""],
     ["gmail_password", ""],
+    // Message templates — blank means use hardcoded defaults in handler.ts
+    ["msg_welcome", ""],
+    ["msg_activate_prompt", ""],
+    ["msg_invalid_key", ""],
+    ["msg_key_verified", ""],
+    ["msg_bad_session", ""],
+    ["msg_activation_ok", ""],
+    ["msg_activation_fail", ""],
+    ["msg_qty_prompt", ""],
+    ["msg_payment_ask_title", ""],
+    ["msg_payment_retry", ""],
+    ["msg_payment_noconfig", ""],
+    ["msg_keys_delivered", ""],
+    ["msg_no_keys", ""],
+    ["msg_duplicate_email", ""],
   ];
   for (const [key, value] of defaults) {
     await pool.query(

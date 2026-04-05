@@ -49,7 +49,6 @@ interface UserState {
   lastActivity: number;
 }
 
-// State maps keyed by `${tenantId}:${jid}` for tenant isolation
 const userStates = new Map<string, UserState>();
 
 const processedIds = new Set<string>();
@@ -120,6 +119,116 @@ function fmt(n: number): string {
 function numEmoji(i: number): string {
   return NUM_EMOJI[i] ?? `${i + 1}.`;
 }
+
+// ── Message template helpers ──────────────────────────────────────────────────
+
+async function getMsg(
+  tenantId: number,
+  key: string,
+  fallback: string,
+  vars?: Record<string, string>
+): Promise<string> {
+  try {
+    const stored = await getTenantSetting(tenantId, key);
+    let msg = (stored && stored.trim()) ? stored.trim() : fallback;
+    if (vars) {
+      for (const [k, v] of Object.entries(vars)) {
+        msg = msg.split(`{{${k}}}`).join(v);
+      }
+    }
+    return msg;
+  } catch {
+    return fallback;
+  }
+}
+
+// ── Default message strings (used as fallbacks) ───────────────────────────────
+
+export const MSG_DEFAULTS = {
+  msg_welcome: `👋 *Welcome to ChatGPT Bot!*
+
+What would you like to do?
+
+1️⃣ Activate existing key
+2️⃣ Purchase a new key
+
+Reply with *1* or *2*`,
+
+  msg_activate_prompt: `🔑 Please send your CDK activation key.`,
+
+  msg_invalid_key: `❌ That doesn't look like a valid CDK key. Please send your key.
+
+Type * for the main menu.`,
+
+  msg_key_verified: `✅ Key verified!{{plan_info}}
+
+🔐 Now I need your ChatGPT *session token* to activate your account.
+
+📋 How to get it:
+1️⃣ Open a browser and go to:
+   chat.openai.com/api/auth/session
+2️⃣ You'll see a JSON page starting with {"user":...
+3️⃣ Select *ALL* the text and send it here
+
+⚠️ This is a long JSON string, NOT your CDK key.`,
+
+  msg_bad_session: `⚠️ That doesn't look like a session token. Please send the full JSON from chat.openai.com/api/auth/session`,
+
+  msg_activation_ok: `🎉 *Activation Successful!*
+📧 Account: {{email}}
+📦 Plan: {{plan}}
+
+Enjoy your subscription! 🚀
+
+Type * for the main menu.`,
+
+  msg_activation_fail: `❌ Activation failed: {{error}}
+
+Make sure you copied the complete JSON from chat.openai.com/api/auth/session and try again.`,
+
+  msg_qty_prompt: `✅ *{{plan_label}}* selected! 🎯
+
+🔢 How many keys do you need? _(1–50)_`,
+
+  msg_payment_ask_title: `✅ Amount: Rs. *{{amount}}*
+
+👤 Now please send your *NayaPay account title* (the name on your account).
+
+Example: *Muhammad Ali*`,
+
+  msg_payment_retry: `❌ Could not verify your payment yet.
+
+NayaPay emails sometimes take 1–2 minutes to arrive. Please wait a moment, then:
+
+👤 *Resend your NayaPay account title* to try again.
+
+Or type * to return to the main menu.`,
+
+  msg_payment_noconfig: `⚠️ Payment verification is temporarily unavailable.
+
+Please send your NayaPay account title again in a minute to retry, or type * for the main menu.`,
+
+  msg_keys_delivered: `🎉 *Here {{are_is}} your {{plan_label}} key{{plural}}:* 🔑
+
+{{keys_list}}
+
+💰 Total paid: Rs. {{total}}
+
+Thank you for your purchase! 🙏
+Type * for the main menu.`,
+
+  msg_no_keys: `😔 Sorry, no keys are available right now. Please contact support.
+
+Type * for the main menu.`,
+
+  msg_duplicate_email: `❌ This payment has already been used for a previous order.
+
+If you believe this is an error, please contact support.
+
+Type * for the main menu.`,
+};
+
+// ── Auto-generated messages (built from dynamic pricing/calc) ─────────────────
 
 async function getPlanMenuMsg(tenantId: number): Promise<string> {
   const prices = await Promise.all(
@@ -193,28 +302,7 @@ async function getOrderMsg(
   return { msg, total, configured };
 }
 
-const MAIN_MENU = `👋 *Welcome to ChatGPT Bot!*
-
-What would you like to do?
-
-1️⃣ Activate existing key
-2️⃣ Purchase a new key
-
-Reply with *1* or *2*`;
-
-function keyVerifiedMsg(plan?: string): string {
-  return `✅ Key verified!${plan ? ` _(${plan})_` : ""}
-
-🔐 Now I need your ChatGPT *session token* to activate your account.
-
-📋 How to get it:
-1️⃣ Open a browser and go to:
-   chat.openai.com/api/auth/session
-2️⃣ You'll see a JSON page starting with {"user":...
-3️⃣ Select *ALL* the text and send it here
-
-⚠️ This is a long JSON string, NOT your CDK key.`;
-}
+// ── Main message handler ──────────────────────────────────────────────────────
 
 export async function handleMessage(
   tenantId: number,
@@ -238,7 +326,7 @@ export async function handleMessage(
   if (["*", "menu", "start", "hi", "hello", "/start"].includes(lc)) {
     state = { stage: "idle", lastActivity: now };
     userStates.set(stateKey, state);
-    await sendReply(MAIN_MENU);
+    await sendReply(await getMsg(tenantId, "msg_welcome", MSG_DEFAULTS.msg_welcome));
     return;
   }
 
@@ -247,7 +335,7 @@ export async function handleMessage(
     if (trimmed === "1") {
       state.stage = "activate_awaiting_key";
       userStates.set(stateKey, state);
-      await sendReply("🔑 Please send your CDK activation key.");
+      await sendReply(await getMsg(tenantId, "msg_activate_prompt", MSG_DEFAULTS.msg_activate_prompt));
       return;
     }
     if (trimmed === "2") {
@@ -256,7 +344,7 @@ export async function handleMessage(
       await sendReply(await getPlanMenuMsg(tenantId));
       return;
     }
-    await sendReply(MAIN_MENU);
+    await sendReply(await getMsg(tenantId, "msg_welcome", MSG_DEFAULTS.msg_welcome));
     userStates.set(stateKey, state);
     return;
   }
@@ -264,7 +352,7 @@ export async function handleMessage(
   // ── ACTIVATE: awaiting CDK key ────────────────────────────────────────────
   if (state.stage === "activate_awaiting_key") {
     if (!isCdkKeyFormat(trimmed)) {
-      await sendReply("❌ That doesn't look like a valid CDK key. Please send your key.\n\nType * for the main menu.");
+      await sendReply(await getMsg(tenantId, "msg_invalid_key", MSG_DEFAULTS.msg_invalid_key));
       return;
     }
     const result = await checkKey(trimmed);
@@ -272,13 +360,18 @@ export async function handleMessage(
       state.stage = "activate_awaiting_session";
       state.cdkKey = trimmed;
       userStates.set(stateKey, state);
-      await sendReply(keyVerifiedMsg(result.subscription ?? result.product));
+      const planInfo = (result.subscription ?? result.product)
+        ? ` _(${result.subscription ?? result.product})_`
+        : "";
+      await sendReply(
+        await getMsg(tenantId, "msg_key_verified", MSG_DEFAULTS.msg_key_verified, { plan_info: planInfo })
+      );
     } else if (result.status === "used") {
       await sendReply("❌ This key has already been activated.\n\nType * for the main menu.");
     } else if (result.status === "expired") {
       await sendReply("❌ This key has expired.\n\nType * for the main menu.");
     } else if (result.status === "invalid") {
-      await sendReply("❌ Invalid key. Please check and try again.");
+      await sendReply(await getMsg(tenantId, "msg_invalid_key", MSG_DEFAULTS.msg_invalid_key));
     } else {
       await sendReply("⚠️ Could not verify the key right now. Please try again in a moment.");
     }
@@ -292,14 +385,19 @@ export async function handleMessage(
       if (result.status === "available") {
         state.cdkKey = trimmed;
         userStates.set(stateKey, state);
-        await sendReply(keyVerifiedMsg(result.subscription ?? result.product));
+        const planInfo = (result.subscription ?? result.product)
+          ? ` _(${result.subscription ?? result.product})_`
+          : "";
+        await sendReply(
+          await getMsg(tenantId, "msg_key_verified", MSG_DEFAULTS.msg_key_verified, { plan_info: planInfo })
+        );
       } else {
         await sendReply("❌ Invalid key. Please send the session token JSON or a valid CDK key.");
       }
       return;
     }
     if (!isSessionToken(trimmed)) {
-      await sendReply(keyVerifiedMsg());
+      await sendReply(await getMsg(tenantId, "msg_bad_session", MSG_DEFAULTS.msg_bad_session));
       return;
     }
     await sendReply("⏳ Activating your account, please wait...");
@@ -307,12 +405,17 @@ export async function handleMessage(
     if (activation.success) {
       userStates.delete(stateKey);
       await sendReply(
-        `🎉 *Activation Successful!*\n📧 Account: ${activation.email ?? "N/A"}\n📦 Plan: ${activation.subscription ?? activation.product ?? "N/A"}\n\nEnjoy your subscription! 🚀\n\nType * for the main menu.`
+        await getMsg(tenantId, "msg_activation_ok", MSG_DEFAULTS.msg_activation_ok, {
+          email: activation.email ?? "N/A",
+          plan: activation.subscription ?? activation.product ?? "N/A",
+        })
       );
     } else {
       userStates.set(stateKey, state);
       await sendReply(
-        `❌ Activation failed: ${activation.errorMessage ?? "Unknown error"}\n\nMake sure you copied the complete JSON from chat.openai.com/api/auth/session and try again.`
+        await getMsg(tenantId, "msg_activation_fail", MSG_DEFAULTS.msg_activation_fail, {
+          error: activation.errorMessage ?? "Unknown error",
+        })
       );
     }
     return;
@@ -333,7 +436,11 @@ export async function handleMessage(
     state.selectedPlan = plan;
     state.stage = "purchase_awaiting_qty";
     userStates.set(stateKey, state);
-    await sendReply(`✅ *${PLAN_LABELS[plan]}* selected! 🎯\n\n🔢 How many keys do you need? _(1–50)_`);
+    await sendReply(
+      await getMsg(tenantId, "msg_qty_prompt", MSG_DEFAULTS.msg_qty_prompt, {
+        plan_label: PLAN_LABELS[plan],
+      })
+    );
     return;
   }
 
@@ -352,7 +459,6 @@ export async function handleMessage(
     userStates.set(stateKey, state);
     await createPayment(tenantId, jid, state.internalRef).catch(() => {});
     await sendReply(msg);
-    // Note: we proceed even if account not fully configured — it shows a support message in the order msg
     return;
   }
 
@@ -373,7 +479,9 @@ export async function handleMessage(
     state.stage = "purchase_awaiting_title";
     userStates.set(stateKey, state);
     await sendReply(
-      `✅ Amount: Rs. *${fmt(paid)}*\n\n👤 Now please send your *NayaPay account title* (the name on your account).\n\nExample: *Muhammad Ali*`
+      await getMsg(tenantId, "msg_payment_ask_title", MSG_DEFAULTS.msg_payment_ask_title, {
+        amount: fmt(paid),
+      })
     );
     return;
   }
@@ -387,7 +495,6 @@ export async function handleMessage(
     await updatePaymentDetails(state.internalRef!, trimmed, String(state.expectedTotal ?? "")).catch(() => {});
     await sendReply("⏳ Verifying your payment, please wait...");
 
-    // Get tenant's Gmail credentials — fall back to env vars if not configured in settings
     const gmailUser = (await getTenantSetting(tenantId, "gmail_user")) ?? "";
     const gmailPass = (await getTenantSetting(tenantId, "gmail_password")) ?? "";
     const envUser = process.env["GMAIL_USER"] ?? "";
@@ -397,10 +504,7 @@ export async function handleMessage(
     const gmailAvailable = !!(effectiveUser && effectivePass);
 
     if (!gmailAvailable) {
-      // No Gmail at all — keep state so customer can retry once configured
-      await sendReply(
-        `⚠️ Payment verification is temporarily unavailable.\n\nPlease send your NayaPay account title again in a minute to retry, or type * for the main menu.`
-      );
+      await sendReply(await getMsg(tenantId, "msg_payment_noconfig", MSG_DEFAULTS.msg_payment_noconfig));
       state.stage = "purchase_awaiting_title";
       userStates.set(stateKey, state);
       return;
@@ -413,33 +517,26 @@ export async function handleMessage(
     );
 
     if (!result.verified) {
-      // Keep state — customer can retry by resending their account title
-      await sendReply(
-        `❌ Could not verify your payment yet.\n\nNayaPay emails sometimes take 1–2 minutes to arrive. Please wait a moment, then:\n\n👤 *Resend your NayaPay account title* to try again.\n\nOr type * to return to the main menu.`
-      );
+      await sendReply(await getMsg(tenantId, "msg_payment_retry", MSG_DEFAULTS.msg_payment_retry));
       state.stage = "purchase_awaiting_title";
       userStates.set(stateKey, state);
       return;
     }
 
-    // Fraud check: claim email so it can't be reused
     if (result.messageId) {
       const claimed = await claimEmailMessageId(state.internalRef!, result.messageId);
       if (!claimed) {
         logger.warn({ tenantId, jid, messageId: result.messageId }, "[handler] Duplicate email claim rejected");
-        await sendReply(
-          `❌ This payment has already been used for a previous order.\n\nIf you believe this is an error, please contact support.\n\nType * for the main menu.`
-        );
+        await sendReply(await getMsg(tenantId, "msg_duplicate_email", MSG_DEFAULTS.msg_duplicate_email));
         state = { stage: "idle", lastActivity: now };
         userStates.set(stateKey, state);
         return;
       }
     }
 
-    // Deliver keys
     const keys = await getAvailableKeys(tenantId, state.selectedPlan!, state.expectedQty!);
     if (keys.length === 0) {
-      await sendReply("😔 Sorry, no keys are available right now. Please contact support.\n\nType * for the main menu.");
+      await sendReply(await getMsg(tenantId, "msg_no_keys", MSG_DEFAULTS.msg_no_keys));
       state = { stage: "idle", lastActivity: now };
       userStates.set(stateKey, state);
       return;
@@ -462,15 +559,17 @@ export async function handleMessage(
 
     userStates.delete(stateKey);
     await sendReply(
-      `🎉 *Here ${keys.length === 1 ? "is your" : "are your"} ${planLabel} key${keys.length > 1 ? "s" : ""}:* 🔑\n\n` +
-      `${keyList}\n\n` +
-      `💰 Total paid: Rs. ${fmt(state.expectedTotal!)}\n\n` +
-      `Thank you for your purchase! 🙏\n` +
-      `Type * for the main menu.`
+      await getMsg(tenantId, "msg_keys_delivered", MSG_DEFAULTS.msg_keys_delivered, {
+        are_is: keys.length === 1 ? "is" : "are",
+        plan_label: planLabel,
+        plural: keys.length > 1 ? "s" : "",
+        keys_list: keyList,
+        total: fmt(state.expectedTotal!),
+      })
     );
     return;
   }
 
-  await sendReply(MAIN_MENU);
+  await sendReply(await getMsg(tenantId, "msg_welcome", MSG_DEFAULTS.msg_welcome));
   userStates.set(stateKey, { stage: "idle", lastActivity: now });
 }

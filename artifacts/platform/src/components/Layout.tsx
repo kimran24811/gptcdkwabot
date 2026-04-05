@@ -9,6 +9,7 @@ const navItems = [
   { path: "/keys", label: "Keys", icon: "🔑" },
   { path: "/payments", label: "Payments", icon: "💳" },
   { path: "/customers", label: "Customers", icon: "👥" },
+  { path: "/messages", label: "Bot Messages", icon: "💬" },
   { path: "/settings", label: "Settings", icon: "⚙️" },
 ];
 
