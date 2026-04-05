@@ -159,11 +159,13 @@ async function getOrderMsg(
   tenantId: number,
   plan: PlanCode,
   qty: number
-): Promise<{ msg: string; total: number }> {
-  const account = (await getTenantSetting(tenantId, "account_number")) ?? "—";
+): Promise<{ msg: string; total: number; configured: boolean }> {
+  const account = (await getTenantSetting(tenantId, "account_number")) ?? "";
   const bank = (await getTenantSetting(tenantId, "bank_name")) ?? "Nayapay";
   const { basePrice, discountPct, discountAmt, total } = await calcOrder(tenantId, plan, qty);
   const label = PLAN_LABELS[plan];
+
+  const configured = !!(account.trim());
 
   let priceLines: string;
   if (discountPct > 0) {
@@ -175,16 +177,20 @@ async function getOrderMsg(
     priceLines = `💵 Rs. ${fmt(basePrice)} × ${qty} = *Rs. ${fmt(total)}*`;
   }
 
+  const accountLine = account.trim()
+    ? `📱 Account: *${account.trim()}*`
+    : `📱 Account: _(contact support for payment details)_`;
+
   const msg =
     `🧾 *Order Summary*\n` +
     `📦 ${label} × ${qty} key${qty > 1 ? "s" : ""}\n` +
     `💰 ${priceLines}\n\n` +
     `📲 Please send *Rs. ${fmt(total)}* to:\n` +
     `🏦 Bank: ${bank}\n` +
-    `📱 Account: *${account}*\n\n` +
+    `${accountLine}\n\n` +
     `💬 After payment, reply with the *amount* you paid (numbers only).`;
 
-  return { msg, total };
+  return { msg, total, configured };
 }
 
 const MAIN_MENU = `👋 *Welcome to ChatGPT Bot!*
@@ -346,6 +352,7 @@ export async function handleMessage(
     userStates.set(stateKey, state);
     await createPayment(tenantId, jid, state.internalRef).catch(() => {});
     await sendReply(msg);
+    // Note: we proceed even if account not fully configured — it shows a support message in the order msg
     return;
   }
 
