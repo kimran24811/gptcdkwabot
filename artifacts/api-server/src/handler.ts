@@ -370,8 +370,40 @@ export async function handleMessage(
       return;
     }
     const result = await checkKey(trimmed);
-    if (result.status === "available") {
-      state.stage = "activate_awaiting_session";
+    if (result.status === "invalid") {
+      await sendReply(await getMsg(tenantId, "msg_invalid_key", MSG_DEFAULTS.msg_invalid_key));
+      return;
+    }
+    if (result.status === "expired") {
+      await sendReply("❌ This key has expired.\n\nType * for the main menu.");
+      return;
+    }
+    if (result.status === "error") {
+      await sendReply("⚠️ Could not reach the key server right now. Please try again in a moment.");
+      return;
+    }
+    // status is "available" or "used" — always proceed and let activateKey decide
+    state.stage = "activate_awaiting_session";
+    state.cdkKey = trimmed;
+    userStates.set(stateKey, state);
+    const planInfo = (result.subscription ?? result.product)
+      ? ` _(${result.subscription ?? result.product})_`
+      : "";
+    await sendReply(
+      await getMsg(tenantId, "msg_key_verified", MSG_DEFAULTS.msg_key_verified, { plan_info: planInfo })
+    );
+    return;
+  }
+
+  // ── ACTIVATE: awaiting session token ─────────────────────────────────────
+  if (state.stage === "activate_awaiting_session") {
+    if (isCdkKeyFormat(trimmed) && !isSessionToken(trimmed)) {
+      const result = await checkKey(trimmed);
+      if (result.status === "invalid" || result.status === "expired") {
+        await sendReply("❌ That key is not valid. Please send the session token JSON or a different CDK key.");
+        return;
+      }
+      // "available", "used", or "error" — accept and let activateKey decide
       state.cdkKey = trimmed;
       userStates.set(stateKey, state);
       const planInfo = (result.subscription ?? result.product)
@@ -380,34 +412,6 @@ export async function handleMessage(
       await sendReply(
         await getMsg(tenantId, "msg_key_verified", MSG_DEFAULTS.msg_key_verified, { plan_info: planInfo })
       );
-    } else if (result.status === "used") {
-      await sendReply("❌ This key has already been activated.\n\nType * for the main menu.");
-    } else if (result.status === "expired") {
-      await sendReply("❌ This key has expired.\n\nType * for the main menu.");
-    } else if (result.status === "invalid") {
-      await sendReply(await getMsg(tenantId, "msg_invalid_key", MSG_DEFAULTS.msg_invalid_key));
-    } else {
-      await sendReply("⚠️ Could not verify the key right now. Please try again in a moment.");
-    }
-    return;
-  }
-
-  // ── ACTIVATE: awaiting session token ─────────────────────────────────────
-  if (state.stage === "activate_awaiting_session") {
-    if (isCdkKeyFormat(trimmed) && !isSessionToken(trimmed)) {
-      const result = await checkKey(trimmed);
-      if (result.status === "available") {
-        state.cdkKey = trimmed;
-        userStates.set(stateKey, state);
-        const planInfo = (result.subscription ?? result.product)
-          ? ` _(${result.subscription ?? result.product})_`
-          : "";
-        await sendReply(
-          await getMsg(tenantId, "msg_key_verified", MSG_DEFAULTS.msg_key_verified, { plan_info: planInfo })
-        );
-      } else {
-        await sendReply("❌ Invalid key. Please send the session token JSON or a valid CDK key.");
-      }
       return;
     }
     if (!isSessionToken(trimmed)) {
