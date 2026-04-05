@@ -112,14 +112,37 @@ export async function activateKey(
     // CDK API expects "user_token" = the accessToken JWT, not the full JSON blob
     const { token: user_token, truncated } = extractAccessToken(sessionToken);
 
+    // Decode JWT payload (no signature verify) to log expiry for diagnostics
+    let jwtExp: number | undefined;
+    let jwtEmail: string | undefined;
+    let jwtExpStr = "unknown";
+    try {
+      const parts = user_token.split(".");
+      if (parts.length >= 2) {
+        const payload = JSON.parse(
+          Buffer.from(parts[1]!, "base64url").toString("utf-8")
+        ) as { exp?: number; email?: string; "https://api.openai.com/profile"?: { email?: string } };
+        jwtExp = payload.exp;
+        jwtEmail = payload.email ?? payload["https://api.openai.com/profile"]?.email;
+        if (jwtExp) {
+          const expDate = new Date(jwtExp * 1000);
+          const nowMs = Date.now();
+          const diffSec = Math.round((jwtExp * 1000 - nowMs) / 1000);
+          jwtExpStr = diffSec > 0
+            ? `valid for ${diffSec}s more (expires ${expDate.toISOString()})`
+            : `EXPIRED ${Math.abs(diffSec)}s ago (expired ${expDate.toISOString()})`;
+        }
+      }
+    } catch { /* ignore decode errors */ }
+
     logger.info(
       {
         key,
         tokenLength: user_token.length,
         truncated,
-        tokenStart: user_token.slice(0, 30),
-        tokenEnd: user_token.slice(-20),
         jwtParts: user_token.split(".").length,
+        jwtExpiry: jwtExpStr,
+        jwtEmail,
       },
       "[cdk] activateKey calling API"
     );
