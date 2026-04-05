@@ -34,9 +34,9 @@ export async function verifyPaymentByEmail(
 
     const lock = await client.getMailboxLock("INBOX");
     try {
-      // Only check emails from the last 3 hours — prevents reuse of old emails
+      // Check emails from the last 6 hours — catches slow NayaPay delivery
       const since = new Date();
-      since.setHours(since.getHours() - 3);
+      since.setHours(since.getHours() - 6);
 
       const uids = await client.search({ since, body: amount });
 

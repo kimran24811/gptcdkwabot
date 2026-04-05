@@ -380,29 +380,38 @@ export async function handleMessage(
     await updatePaymentDetails(state.internalRef!, trimmed, String(state.expectedTotal ?? "")).catch(() => {});
     await sendReply("⏳ Verifying your payment, please wait...");
 
-    // Get tenant's Gmail credentials
+    // Get tenant's Gmail credentials — fall back to env vars if not configured in settings
     const gmailUser = (await getTenantSetting(tenantId, "gmail_user")) ?? "";
     const gmailPass = (await getTenantSetting(tenantId, "gmail_password")) ?? "";
-    const gmailConfigured = !!(gmailUser && gmailPass);
+    const envUser = process.env["GMAIL_USER"] ?? "";
+    const envPass = process.env["GMAIL_APP_PASSWORD"] ?? "";
+    const effectiveUser = gmailUser || envUser;
+    const effectivePass = gmailPass || envPass;
+    const gmailAvailable = !!(effectiveUser && effectivePass);
+
+    if (!gmailAvailable) {
+      // No Gmail at all — keep state so customer can retry once configured
+      await sendReply(
+        `⚠️ Payment verification is temporarily unavailable.\n\nPlease send your NayaPay account title again in a minute to retry, or type * for the main menu.`
+      );
+      state.stage = "purchase_awaiting_title";
+      userStates.set(stateKey, state);
+      return;
+    }
 
     const result = await verifyPaymentByEmail(
       trimmed,
       String(state.expectedTotal ?? ""),
-      gmailConfigured ? { user: gmailUser, pass: gmailPass } : undefined
+      { user: effectiveUser, pass: effectivePass }
     );
 
     if (!result.verified) {
-      if (!gmailConfigured) {
-        await sendReply("⚠️ Automatic verification is not available right now. Please contact support.\n\nType * for the main menu.");
-        state = { stage: "idle", lastActivity: now };
-        userStates.set(stateKey, state);
-      } else {
-        await sendReply(
-          `❌ Could not verify your payment.\n\nPlease check:\n• 💵 Amount paid: *Rs. ${fmt(state.expectedTotal!)}*\n• 👤 Your exact NayaPay account title\n\nResend your account title to try again, or type * for the main menu.`
-        );
-        state.stage = "purchase_awaiting_title";
-        userStates.set(stateKey, state);
-      }
+      // Keep state — customer can retry by resending their account title
+      await sendReply(
+        `❌ Could not verify your payment yet.\n\nNayaPay emails sometimes take 1–2 minutes to arrive. Please wait a moment, then:\n\n👤 *Resend your NayaPay account title* to try again.\n\nOr type * to return to the main menu.`
+      );
+      state.stage = "purchase_awaiting_title";
+      userStates.set(stateKey, state);
       return;
     }
 
