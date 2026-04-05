@@ -122,10 +122,20 @@ class WAManager {
 
       for (const msg of messages) {
         const jid = msg.key.remoteJid ?? "";
+
+        // Never respond to our own messages
         if (msg.key.fromMe) continue;
 
-        const isDM = jid.endsWith("@s.whatsapp.net") || jid.endsWith("@lid");
-        if (!isDM) continue;
+        // Only respond to individual DMs — skip groups, broadcasts, newsletters, status
+        const isGroup       = jid.endsWith("@g.us");
+        const isBroadcast   = jid.endsWith("@broadcast") || jid === "status@broadcast";
+        const isNewsletter  = jid.endsWith("@newsletter");
+        const isDM          = jid.endsWith("@s.whatsapp.net") || jid.endsWith("@lid");
+
+        if (isGroup || isBroadcast || isNewsletter || !isDM) {
+          logger.debug({ tenantId, jid }, "[wa-manager] Skipping non-DM message");
+          continue;
+        }
 
         const msgId = msg.key.id ?? "";
         if (isDuplicate(tenantId, msgId)) continue;
